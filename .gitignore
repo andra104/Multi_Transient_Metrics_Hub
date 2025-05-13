@@ -43,3 +43,5 @@ __pycache__/
 resultsDb_sqlite.db
 
 
+*.h5
+*.npz
