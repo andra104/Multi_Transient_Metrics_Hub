@@ -305,10 +305,22 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             self.obs_records[slice_point['sid']] = obs_record
         
             self.latest_obs_record = obs_record
+            
             return 1.0
+            
         else:
-            self.latest_obs_record = None
+            obs_record.update({
+                'sid': slice_point['sid'],
+                'file_indx': slice_point['file_indx'],
+                'ra': slice_point['ra'],
+                'dec': slice_point['dec'],
+                'distance_Mpc': slice_point['distance'],
+                'peak_mjd': self.mjd0 + slice_point['peak_time'],
+                'detected': False
+            })
+            self.obs_records[slice_point['sid']] = obs_record
             return 0.0
+
 
 
 class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
