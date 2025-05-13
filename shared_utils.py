@@ -1,6 +1,7 @@
 from astropy.coordinates import Galactic, ICRS as ICRSFrame
 import numpy as np
 import matplotlib.pyplot as plt
+import healpy as hp
 
 # --------------------------------------------------
 # Utility: Convert Galactic to Equatorial coordinates
@@ -51,3 +52,27 @@ def uniform_sphere_degrees(n_points, seed=None):
     print("YAY! UNIFORM SPHERE!")
     return ra, dec
 
+# --------------------------------------------
+# Uniform Sphere Healpix
+# --------------------------------------------
+def inject_uniform_healpix(nside, n_events, seed=42):
+    npix = hp.nside2npix(nside)
+    rng = np.random.default_rng(seed)
+    pix = rng.choice(npix, size=n_events)
+    theta, phi = hp.pix2ang(nside, pix)
+    ra = np.degrees(phi)
+    dec = np.degrees(0.5 * np.pi - theta)
+    return ra, dec
+# --------------------------------------------
+# Updated utility for realistic uniform sky with WFD mask
+# --------------------------------------------
+
+def uniform_wfd_sky(n_points, mask_map, nside=64, seed=None):
+    rng = np.random.default_rng(seed)
+    ipix_all = np.arange(len(mask_map))
+    ipix_wfd = ipix_all[mask_map > 0.5]  # Use mask threshold to define footprint
+    selected_ipix = rng.choice(ipix_wfd, size=n_points, replace=True)
+    theta, phi = hp.pix2ang(64, selected_ipix, nest=False)
+    dec = 90 - np.degrees(theta)
+    ra = np.degrees(phi)
+    return ra, dec
