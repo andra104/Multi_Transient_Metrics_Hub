@@ -38,10 +38,10 @@ class GRBAfterglowLC:
 
     Light curves follow:
         m(t) = m_0 + 2.5 * alpha * log10(t/t_0)
-    where alpha is the temporal slope (rise or decay), t is time (days),
+    where alpha is the temporal slope (decay), t is time (days),
     and m_0 is the peak magnitude (from Zeh et al. 2005).
 
-    The rise slope is negative (brightening), and the decay is positive (fading).
+    The light curve begins at peak magnitude, and the decay is positive (fading).
     """
     def __init__(self, num_samples=100, num_lightcurves=1000, load_from=None):
         """
@@ -65,7 +65,6 @@ class GRBAfterglowLC:
         self.t_grid = np.logspace(-1, 2, num_samples)  # 0.1 to 100 days
 
         decay_slope_range = (0.5, 2.5)
-        rise_slope_range = (-1.5, -0.5)
         peak_mag_range = (-24, -22)
 
         rng = np.random.default_rng(42)
@@ -73,14 +72,8 @@ class GRBAfterglowLC:
             lc = {}
             for f in self.filts:
                 m0 = rng.uniform(*peak_mag_range)
-                alpha_rise = rng.uniform(*rise_slope_range)
                 alpha_fade = rng.uniform(*decay_slope_range)
-                t0 = 0.3
-                mag = np.where(
-                    self.t_grid < t0,
-                    m0 + 2.5 * alpha_rise * np.log10(self.t_grid / t0),
-                    m0 + 2.5 * alpha_fade * np.log10(self.t_grid / t0)
-                )
+                mag = m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
                 lc[f] = {'ph': self.t_grid, 'mag': mag}
             self.data.append(lc)
 
@@ -197,8 +190,9 @@ class BaseGRBAfterglowMetric(BaseMetric):
                 'filter': filters,
                 # NO 'detected' YET -- will be set later if detected!
             }
+            
             return snr, filters, times, obs_record
-        return snr, filters, times
+        return snr, filters, times, None
 
     def detect(self, filters, snr, times, obs_record):
         detected = False        
@@ -249,14 +243,19 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
+
+        if obs_record is None:
+            return self.badval
         
         if self.filter_include is not None:
             keep = np.isin(filters, self.filter_include)
             snr = snr[keep]
             filters = filters[keep]
             times = times[keep]
-            for k in ['mjd_obs', 'mag_obs']:
-                obs_record[k] = obs_record[k][keep]
+            for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
+                if isinstance(obs_record[k], np.ndarray):
+                    obs_record[k] = obs_record[k][keep]
+
 
         
                 
@@ -266,19 +265,19 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
     
         if detected:
             detected_mask = snr >= 5
-            obs_record['detected'] = (snr >= 5)
+            #obs_record['detected'] = (snr >= 5)
+            obs_record['detected'] = bool(np.any(detected))
+
             self.latest_obs_record = obs_record
 
-            # Calculate rise and fade times
+            # Calculate fade times
             first_det_mjd = np.nan
             last_det_mjd = np.nan
-            rise_time = np.nan
             fade_time = np.nan
         
             if np.any(detected_mask):
                 first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
                 last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
-                rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
                 fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
         
             peak_index = np.argmin(obs_record['mag_obs'])
@@ -289,7 +288,6 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             obs_record.update({
                 'first_det_mjd': first_det_mjd,
                 'last_det_mjd': last_det_mjd,
-                'rise_time_days': rise_time,
                 'fade_time_days': fade_time,
                 'sid': slice_point['sid'],
                 'file_indx': slice_point['file_indx'],
@@ -305,10 +303,22 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             self.obs_records[slice_point['sid']] = obs_record
         
             self.latest_obs_record = obs_record
+            
             return 1.0
+            
         else:
-            self.latest_obs_record = None
+            obs_record.update({
+                'sid': slice_point['sid'],
+                'file_indx': slice_point['file_indx'],
+                'ra': slice_point['ra'],
+                'dec': slice_point['dec'],
+                'distance_Mpc': slice_point['distance'],
+                'peak_mjd': self.mjd0 + slice_point['peak_time'],
+                'detected': False
+            })
+            self.obs_records[slice_point['sid']] = obs_record
             return 0.0
+
 
 
 class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
@@ -337,8 +347,9 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
             snr = snr[keep]
             filters = filters[keep]
             times = times[keep]
-            for k in ['mjd_obs', 'mag_obs']:
-                obs_record[k] = obs_record[k][keep]
+            for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
+                if isinstance(obs_record[k], np.ndarray):
+                    obs_record[k] = obs_record[k][keep]
 
         # -------- Detection Logic --------
         
@@ -358,16 +369,14 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
             obs_record['detected'] = (snr >= 5)
             self.latest_obs_record = obs_record
 
-            # Calculate rise and fade times
+            # Calculate and fade times
             first_det_mjd = np.nan
             last_det_mjd = np.nan
-            rise_time = np.nan
             fade_time = np.nan
         
             if np.any(detected_mask):
                 first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
                 last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
-                rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
                 fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
         
             peak_index = np.argmin(obs_record['mag_obs'])
@@ -378,7 +387,6 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
             obs_record.update({
                 'first_det_mjd': first_det_mjd,
                 'last_det_mjd': last_det_mjd,
-                'rise_time_days': rise_time,
                 'fade_time_days': fade_time,
                 'sid': slice_point['sid'],
                 'file_indx': slice_point['file_indx'],
