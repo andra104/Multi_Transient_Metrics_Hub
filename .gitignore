@@ -22,7 +22,7 @@ __pycache__/
 !rubin_sim_223_environment.yml
 *.yaml
 !rubin_sim_223_environment.yaml
-
+*.csv
 # === Ignore environment/lock/log files ===
 *.env
 *.lock
