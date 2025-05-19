@@ -1,6 +1,7 @@
 # === Ignore large database and binary files ===
 *.db
 *.pkl
+*.csv
 
 # Explicitly ignore known large files by name
 baseline_v4.3.1_10yrs.db
