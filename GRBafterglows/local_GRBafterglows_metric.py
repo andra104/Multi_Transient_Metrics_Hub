@@ -250,10 +250,10 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
-
+    
         if obs_record is None:
             return self.badval
-        
+    
         if self.filter_include is not None:
             keep = np.isin(filters, self.filter_include)
             snr = snr[keep]
@@ -262,72 +262,50 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
                 if isinstance(obs_record[k], np.ndarray):
                     obs_record[k] = obs_record[k][keep]
-
-
-        
-                
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
-        
-        # -------- Save Detection Metadata --------
     
-        if detected:
-            detected_mask = snr >= 5
-            #obs_record['detected'] = (snr >= 5)
-            obs_record['detected'] = bool(np.any(detected))
-
-            self.latest_obs_record = obs_record
-
-            # Calculate rise and fade times
-            first_det_mjd = np.nan
-            last_det_mjd = np.nan
-            rise_time = np.nan
-            fade_time = np.nan
-        
-            if np.any(detected_mask):
-                first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
-                last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
-                rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
-                fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
-        
-            peak_index = np.argmin(obs_record['mag_obs'])
-            peak_mjd = obs_record['mjd_obs'][peak_index]
-            peak_mag = obs_record['mag_obs'][peak_index]
-        
-            # Update obs_record with full metadata
-            obs_record.update({
-                'first_det_mjd': first_det_mjd,
-                'last_det_mjd': last_det_mjd,
-                'rise_time_days': rise_time,
-                'fade_time_days': fade_time,
-                'sid': slice_point['sid'],
-                'file_indx': slice_point['file_indx'],
-                'ra': slice_point['ra'],
-                'dec': slice_point['dec'],
-                'distance_Mpc': slice_point['distance'],
-                'peak_mjd': peak_mjd,
-                'peak_mag': peak_mag,
-                'ebv': slice_point['ebv'],
-            })
-        
-            # Save this full event
-            self.obs_records[slice_point['sid']] = obs_record
-        
-            self.latest_obs_record = obs_record
-            
-            return 1.0
-            
-        else:
-            obs_record.update({
-                'sid': slice_point['sid'],
-                'file_indx': slice_point['file_indx'],
-                'ra': slice_point['ra'],
-                'dec': slice_point['dec'],
-                'distance_Mpc': slice_point['distance'],
-                'peak_mjd': self.mjd0 + slice_point['peak_time'],
-                'detected': False
-            })
-            self.obs_records[slice_point['sid']] = obs_record
-            return 0.0
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+    
+        detected_mask = snr >= 5
+        first_det_mjd = np.nan
+        last_det_mjd = np.nan
+        rise_time = np.nan
+        fade_time = np.nan
+    
+        if np.any(detected_mask):
+            first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
+            last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
+            rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
+            fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
+    
+        peak_index = np.argmin(obs_record['mag_obs'])
+        peak_mjd = obs_record['mjd_obs'][peak_index] if len(obs_record['mjd_obs']) > 0 else np.nan
+        peak_mag = obs_record['mag_obs'][peak_index] if len(obs_record['mag_obs']) > 0 else np.nan
+    
+        obs_record.update({
+            'first_det_mjd': first_det_mjd,
+            'last_det_mjd': last_det_mjd,
+            'rise_time_days': rise_time,
+            'fade_time_days': fade_time,
+            'sid': slice_point['sid'],
+            'file_indx': slice_point['file_indx'],
+            'ra': slice_point['ra'],
+            'dec': slice_point['dec'],
+            'distance_Mpc': slice_point['distance'],
+            'peak_mjd': peak_mjd,
+            'peak_mag': peak_mag,
+            'ebv': slice_point['ebv'],
+            'peak_time': slice_point['peak_time'],
+            'detected': bool(detected),
+            'mjd_obs': obs_record.get('mjd_obs', np.array([])),
+            'mag_obs': obs_record.get('mag_obs', np.array([])),
+            'snr_obs': obs_record.get('snr_obs', np.array([])),
+            'filter': obs_record.get('filter', np.array([]))
+        })
+    
+        self.obs_records[slice_point['sid']] = obs_record
+        self.latest_obs_record = obs_record if detected else None
+    
+        return 1.0 if detected else 0.0
 
 
 
@@ -376,8 +354,8 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
     
         if detected:
             detected_mask = snr >= 5
-            obs_record['detected'] = (snr >= 5)
-            self.latest_obs_record = obs_record
+            obs_record['detected'] = bool(np.any(detected_mask))
+            #self.latest_obs_record = obs_record
 
             # Calculate rise and fade times
             first_det_mjd = np.nan
@@ -412,9 +390,9 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
             })
         
             # Save this full event
-            self.obs_records[slice_point['sid']] = obs_record
+            #self.obs_records[slice_point['sid']] = obs_record
         
-            self.latest_obs_record = obs_record
+            #self.latest_obs_record = obs_record
             return 1.0
         else:
             self.latest_obs_record = None
