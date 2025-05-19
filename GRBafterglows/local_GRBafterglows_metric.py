@@ -197,8 +197,9 @@ class BaseGRBAfterglowMetric(BaseMetric):
                 'filter': filters,
                 # NO 'detected' YET -- will be set later if detected!
             }
+            
             return snr, filters, times, obs_record
-        return snr, filters, times
+        return snr, filters, times, None
 
     def detect(self, filters, snr, times, obs_record):
         detected = False        
@@ -249,14 +250,19 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
+
+        if obs_record is None:
+            return self.badval
         
         if self.filter_include is not None:
             keep = np.isin(filters, self.filter_include)
             snr = snr[keep]
             filters = filters[keep]
             times = times[keep]
-            for k in ['mjd_obs', 'mag_obs']:
-                obs_record[k] = obs_record[k][keep]
+            for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
+                if isinstance(obs_record[k], np.ndarray):
+                    obs_record[k] = obs_record[k][keep]
+
 
         
                 
@@ -266,7 +272,9 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
     
         if detected:
             detected_mask = snr >= 5
-            obs_record['detected'] = (snr >= 5)
+            #obs_record['detected'] = (snr >= 5)
+            obs_record['detected'] = bool(np.any(detected))
+
             self.latest_obs_record = obs_record
 
             # Calculate rise and fade times
@@ -349,8 +357,9 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
             snr = snr[keep]
             filters = filters[keep]
             times = times[keep]
-            for k in ['mjd_obs', 'mag_obs']:
-                obs_record[k] = obs_record[k][keep]
+            for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
+                if isinstance(obs_record[k], np.ndarray):
+                    obs_record[k] = obs_record[k][keep]
 
         # -------- Detection Logic --------
         
