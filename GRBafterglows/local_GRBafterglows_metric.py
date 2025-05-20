@@ -262,8 +262,7 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
                 if isinstance(obs_record[k], np.ndarray):
                     obs_record[k] = obs_record[k][keep]
-    
-
+ 
         detected = self.parent_instance.detect(filters, snr, times, obs_record)
     
         detected_mask = snr >= 5
@@ -301,8 +300,7 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             'mag_obs': obs_record.get('mag_obs', np.array([])),
             'snr_obs': obs_record.get('snr_obs', np.array([])),
             'filter': obs_record.get('filter', np.array([]))
-        })
-    
+        }    
         self.obs_records[slice_point['sid']] = obs_record
         self.latest_obs_record = obs_record if detected else None
     
