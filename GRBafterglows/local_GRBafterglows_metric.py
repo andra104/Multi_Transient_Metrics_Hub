@@ -266,7 +266,6 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
         if np.any(detected_mask):
             first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
             last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
-            rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
             fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
     
         peak_index = np.argmin(obs_record['mag_obs'])
