@@ -80,13 +80,20 @@ class GRBAfterglowLC:
                 # a, b = (0.5 - 1.3) / 0.3, (2.5 - 1.3) / 0.3
                 # trunc_alpha = truncnorm(a=a, b=b, loc=1.3, scale=0.3)
 
-                #shar adjusting these numbers by 10x so that our events fade faster
-                #mean = 13, std = 3, range = [02, 25]
-                a, b = (2 - 13) / 3., (25 - 13) / 3.
-                trunc_alpha = truncnorm(a=a, b=b, loc=13, scale=3.0)
+                #shar - this section works okay
+                # mean = 4, std = 1, range = [2.5, 5]
+                a, b = (2.5 - 4) / .5, (5 - 4) / .5
+                trunc_alpha = truncnorm(a=a, b=b, loc=4, scale=.5)
+                
+                
+                #shar numbers based off paper, needs fiddling
+                # a, b = (.5 - 1.5) / .5, (1.7 - 1.5) / .5
+                # trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
+                
                 alpha_fade = trunc_alpha.rvs(random_state=rng)
-
                 mag = m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
+
+
                 lc[f] = {'ph': self.t_grid, 'mag': mag}
             self.data.append(lc)
 
