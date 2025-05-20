@@ -24,6 +24,7 @@ __pycache__/
 *.yaml
 !rubin_sim_223_environment.yaml
 
+GRBafterglows_fixedpop_detectonly/rd1em08/*
 */*.csv
 */*/*.csv
 *.csv
