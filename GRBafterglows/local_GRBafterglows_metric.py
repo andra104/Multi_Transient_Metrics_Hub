@@ -20,6 +20,7 @@ from dustmaps.sfd import SFDQuery
 import astropy.units as u
 import healpy as hp
 from astropy.cosmology import z_at_value
+from scipy.stats import truncnorm
 import numpy as np
 import glob
 import os
@@ -72,7 +73,13 @@ class GRBAfterglowLC:
             lc = {}
             for f in self.filts:
                 m0 = rng.uniform(*peak_mag_range)
-                alpha_fade = rng.uniform(*decay_slope_range)
+                #alpha_fade = rng.uniform(*decay_slope_range)
+                
+                # Parameters of truncted normal: mean = 1.3, std = 0.3, range = [0.5, 2.5]
+                a, b = (0.5 - 1.3) / 0.3, (2.5 - 1.3) / 0.3
+                trunc_alpha = truncnorm(a=a, b=b, loc=1.3, scale=0.3)
+                alpha_fade = trunc_alpha.rvs(random_state=rng)
+
                 mag = m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
                 lc[f] = {'ph': self.t_grid, 'mag': mag}
             self.data.append(lc)
@@ -256,7 +263,7 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
                 if isinstance(obs_record[k], np.ndarray):
                     obs_record[k] = obs_record[k][keep]
     
-<<<<<<< HEAD
+
         detected = self.parent_instance.detect(filters, snr, times, obs_record)
     
         detected_mask = snr >= 5
@@ -300,7 +307,7 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
         self.latest_obs_record = obs_record if detected else None
     
         return 1.0 if detected else 0.0
-=======
+
         if detected:
             detected_mask = snr >= 5
             #obs_record['detected'] = (snr >= 5)
@@ -343,21 +350,6 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             self.latest_obs_record = obs_record
             
             return 1.0
-            
-        else:
-            obs_record.update({
-                'sid': slice_point['sid'],
-                'file_indx': slice_point['file_indx'],
-                'ra': slice_point['ra'],
-                'dec': slice_point['dec'],
-                'distance_Mpc': slice_point['distance'],
-                'peak_mjd': self.mjd0 + slice_point['peak_time'],
-                'detected': False
-            })
-            self.obs_records[slice_point['sid']] = obs_record
-            return 0.0
->>>>>>> 993c806397d5d1870baae7cafc95409462a1d128
-
 
 
 class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
