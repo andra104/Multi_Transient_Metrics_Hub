@@ -91,6 +91,7 @@ class GRBAfterglowLC:
                 # trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
                 
                 alpha_fade = trunc_alpha.rvs(random_state=rng)
+
                 mag = m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
 
 
@@ -314,6 +315,7 @@ class GRBAfterglowDetectMetric(BaseGRBAfterglowMetric):
             'snr_obs': obs_record.get('snr_obs', np.array([])),
             'filter': obs_record.get('filter', np.array([]))
         })    
+
         self.obs_records[slice_point['sid']] = obs_record
         self.latest_obs_record = obs_record if detected else None
     
