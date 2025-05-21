@@ -63,8 +63,8 @@ class GRBAfterglowLC:
 
         self.data = []
         self.filts = ["u", "g", "r", "i", "z", "y"]
-        self.t_grid = np.logspace(-1, 2, num_samples) + 1  # 0.1 to 100 days
-        #shar adjusting the above to be 1.1 to 101 days
+        self.t_grid = np.logspace(-2, 2, num_samples) # 0.1 to 100 days
+        #fbb adjusted to .01 because .1 day is actually significantly after peak already
 
         # decay_slope_range = (0.5, 2.5) #not using this anymore
         peak_mag_range = (-24, -22)
@@ -82,18 +82,32 @@ class GRBAfterglowLC:
 
                 #shar - this section works okay
                 # mean = 4, std = 1, range = [2.5, 5]
-                a, b = (2.5 - 4) / .5, (5 - 4) / .5
-                trunc_alpha = truncnorm(a=a, b=b, loc=4, scale=.5)
+                # a, b = (2.5 - 4) / .5, (5 - 4) / .5
+                # trunc_alpha = truncnorm(a=a, b=b, loc=4, scale=.5)
+
+                t_jetbreak = np.logspace(0.01, 0.7, 100) #jet break timing (3 times faster decay) between 1 and 5 days
                 
+                jetbreak = np.random.choice(t_jetbreak) # FBB added May 21
                 
-                #shar numbers based off paper, needs fiddling
-                # a, b = (.5 - 1.5) / .5, (1.7 - 1.5) / .5
-                # trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
+                #shar numbers based off Zeh 2005 (different Zeh 2005 though)
+                a, b = (.5 - 1.5) / .5, (1.7 - 1.5) / .5
+                trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
                 
                 alpha_fade = trunc_alpha.rvs(random_state=rng)
 
-                mag = m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
+                adjusted_m0 = m0 - 2.5 * alpha_fade * np.log10(self.t_grid )[0]
+                #shar adjusting so that the first mag is in our peak range
+                mag = adjusted_m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
 
+                 # FBB now replace tail with post-jet break
+                mask = self.t_grid > jetbreak #only dates after the jet break
+                _ = [True if mask[i+1] else False for i,m in enumerate(mask[:-1])] 
+                mask[:-1] = _
+
+                new_decay = 10 * (np.log10(self.t_grid[mask] + 1)) 
+                if mask[0] == True:
+                    mask[0] = False
+                mag[mask] =  new_decay - new_decay[0] + mag[~mask][-1]
 
                 lc[f] = {'ph': self.t_grid, 'mag': mag}
             self.data.append(lc)
