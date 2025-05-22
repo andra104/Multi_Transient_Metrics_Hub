@@ -29,6 +29,7 @@ import pickle
 
 DEBUG = False
 MAXGAP = 1
+
     
 # --------------------------------------------
 # Power-law GRB afterglow model based on Zeh et al. (2005)
@@ -235,21 +236,31 @@ class BaseGRBAfterglowMetric(BaseMetric):
         # Option A: 2 detections in same filter ≥30min apart
         for f in np.unique(filters):
             mask = filters == f
-            if np.sum(snr[mask] >= 5) >= 2:
-                if np.ptp(times[mask]) >= 0.5 / 24 and np.diff(np.sort(times[mask])).min() <= MAXGAP:
+            if np.sum(snr[mask] >= 5) >= 2:        
+                if np.ptp(times[mask]) >= 0.5 / 24 and np.diff(np.sort(times[mask])).min() <= MAXGAP :
                     detected = True
                     break
+        
         return detected
 
     def betterdetect(self, filters, snr, times, obs_record):
+        
 
         mask = snr >= 5
         t_detect = times[snr >= 5]
         detected = False
-        if len(t_detect) > 0:
-            if len(np.unique(filters[mask])) >= 2 :
-                if np.ptp(t_detect) >= 0.5 / 24 and np.diff(np.sort(times[mask])).min() <= MAXGAP:
-                    detected = True
+        if len(t_detect) > 2: # more than 2 detections
+            if len(np.unique(filters[mask])) >= 2 : #more than 2 filters
+                day1 = (times >= times[mask].min() + 2/24) * (times <= times[mask].min() + 1)
+                
+                
+        
+                if np.ptp(t_detect) >= 0.5 / 24 : #two detections in >30 min
+                    if len(times[day1]) > 2: #three detections in 1 night
+                        #np.diff(np.sort(times[day1])).max() <= MAXGAP: 
+                        #not the right logic: 
+                        #print(times[day1])
+                        detected = True
         # Option B: ≥2 epochs, second has ≥2 filters; first can be a non-detection
         return detected
     
@@ -372,15 +383,16 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
     
         # Option A: 2 detections in same filter ≥30min apart
 
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
-        if not detected:
-            detected = self.parent_instance.betterdetect(filters, snr, times, obs_record)
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        #if not detected:
+        detected = self.parent_instance.betterdetect(filters, snr, times, obs_record)
         
         
         # -------- Save Detection Metadata --------
     
         if detected:
-            detected_mask = snr >= 5
+            
+            detected_mask = snr >= 5 # FBB didnt you have this cut earlier too? why doubling it?
             obs_record['detected'] = bool(np.any(detected_mask))
             #self.latest_obs_record = obs_record
 
@@ -397,11 +409,13 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
             peak_index = np.argmin(obs_record['mag_obs'])
             peak_mjd = obs_record['mjd_obs'][peak_index]
             peak_mag = obs_record['mag_obs'][peak_index]
-        
+
             # Update obs_record with full metadata
+
             obs_record.update({
                 'first_det_mjd': first_det_mjd,
                 'last_det_mjd': last_det_mjd,
+                #'rise_time_days': rise_time,
                 'fade_time_days': fade_time,
                 'sid': slice_point['sid'],
                 'file_indx': slice_point['file_indx'],
@@ -411,12 +425,18 @@ class GRBAfterglowBetterDetectMetric(BaseGRBAfterglowMetric):
                 'peak_mjd': peak_mjd,
                 'peak_mag': peak_mag,
                 'ebv': slice_point['ebv'],
-            })
+                'peak_time': slice_point['peak_time'],
+                'detected': bool(detected),
+                'mjd_obs': obs_record.get('mjd_obs', np.array([])),
+                'mag_obs': obs_record.get('mag_obs', np.array([])),
+                'snr_obs': obs_record.get('snr_obs', np.array([])),
+                'filter': obs_record.get('filter', np.array([]))
+            })    
         
             # Save this full event
-            #self.obs_records[slice_point['sid']] = obs_record
-        
-            #self.latest_obs_record = obs_record
+
+            self.obs_records[slice_point['sid']] = obs_record
+            self.latest_obs_record = obs_record if detected else None
             return 1.0
         else:
             self.latest_obs_record = None
