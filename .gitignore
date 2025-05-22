@@ -28,6 +28,9 @@ GRBafterglows_fixedpop_detectonly/rd1em08/*
 */*.csv
 */*/*.csv
 *.csv
+**/rd1em08/
+GRBafterglows/GRBafterglows_fixedpop_detectonly/rd1em08/**/*.npz
+GRBafterglows/GRBafterglows_fixedpop_detectonly/rd1em08/**/*.csv
 
 # === Ignore environment/lock/log files ===
 *.env
@@ -51,3 +54,4 @@ resultsDb_sqlite.db
 
 *.h5
 *.npz
+resultsDb_sqlite.db
