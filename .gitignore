@@ -28,6 +28,7 @@ GRBafterglows_fixedpop_detectonly/rd1em08/*
 */*.csv
 */*/*.csv
 *.csv
+**/rd1em08/
 
 # === Ignore environment/lock/log files ===
 *.env
