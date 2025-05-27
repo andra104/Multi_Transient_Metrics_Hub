@@ -6,9 +6,9 @@
 - **Initial condition**: Light curve begins at peak (no chance of detecting the rise)  
 - **Light curve model**:  
   `m(t) = m₀ + 2.5 × α × log₁₀(t / t₀)`  
-  - Pre-jet break slope: α ≈ 1.5 (range: 0.5–1.7)  
+  - **Pre-jet break power law index**: α ≈ 1.5 (range: 0.5–1.7)  
   - **Jet break time**: Between 1 and 5 days  
-  - **Post-jet break slope**: α = 10  
+  - **Post-jet break power law index**: α = 10  
 - **Filter treatment**: Light curve parameters between filters are currently uncorrelated
 
 
@@ -28,9 +28,10 @@
 - ≥30 minutes apart  
 
 **Option B**  
-- ≥2 epochs total  
+- ≥2 epochs total  (epoch: half a day bin)
 - Second epoch must have ≥2 filters  
-- First epoch may be a non-detection  
+- First epoch may be a non-detection
+- note: option B is always satisfied when option A is satisfied
 
 **Additional constraint**  
 - **Maximum time gap** between any pair of observations: 1 day
