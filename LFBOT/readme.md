@@ -1,5 +1,10 @@
 ## LFBOTs
 
+All of these metrics build on the same core model: a set of synthetic light curves generated from 
+power-law decay models inspired by Zeh et al. (2005), applied within realistic extinction (using 
+DustValues) and distance moduli. Each metric stores full per-event observation records for 
+deeper analysis or visualization.
+
 ### Light Curve Modeling
 
 - **Peak absolute magnitude range**: (-21.5, -20) 
@@ -30,6 +35,25 @@
 **Fallback**  
 - Fallback: If color information is not available, require ≥3 epochs (≥30 minutes separation, ≤6 days total span) to track fading behavior consistent with LFBOT timescales.
 - (with the current cadence, color information should almost always be available)
+
+---
+
+### Characterization Criteria (Preliminary)
+
+This metric checks whether Rubin captured enough of the light curve to inform follow-up and 
+help us understand the transient’s behavior. 
+
+We define photometric characterization as: 
+
+- At least 4 detections with SNR ≥ 3 
+- These detections span ≥ 3 days in the observer frame 
+ 
+This setup is intentionally minimal but meaningful. It doesn’t require multi-filter coverage (since 
+LFBOTs are mostly blue), and it doesn’t assume we’ve caught the peak, just that we’ve seen it 
+evolve. 
+
+In short: If Rubin can capture at least four data points over a few days above SNR=3, we can 
+trace how the event fades and alert follow-up teams quickly. That’s what this metric tracks. 
 
 ---
 
