@@ -12,6 +12,8 @@ import pandas as pd
 from rubin_sim.phot_utils import DustValues
 import rubin_sim.maf.metrics as metrics
 from rubin_sim import maf
+import shutil
+
 
 dust_model = DustValues()
 
@@ -122,7 +124,7 @@ def plot_some_lcs_from_pkl(templates_file, num=3):
 # Run detect metric
 # --------------------------------------------
 
-def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, debug=True, plot=True):
+def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, debug=True, plot=True, clean_temp=False):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -218,7 +220,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
             df_obs[col] = df_obs[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
         
         # Now save
-        df_obs.to_csv(f"{outDir}/ObsRecords_{cadence}.csv", index=False)
+        df_obs.to_csv(os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"), index=False)
     
     
         n_filters_detected_per_event = np.array([
@@ -331,13 +333,19 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
     
     return df_obs_arr #for the last cadence that ran
 
+    
+    if clean_temp:
+        print(f"[CLEANUP] Removing temp directory: {outDir}")
+        shutil.rmtree(outDir, ignore_errors=True)
+
+
 # --------------------------------------------
 # Run several metrics
 # --------------------------------------------
 
 
 
-def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, plot=True):
+def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, plot=True, clean_temp=False):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -381,6 +389,7 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
             bd = maf.metricBundles.make_bundles_dict_from_list([bundle])
             bgroup = metric_bundles.MetricBundleGroup({mb_key: bundle}, opsdb, out_dir=outDir, results_db=resultsDb)
             bgroup.run_all()
+
             if first:
                 df = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 df["run"] = runName
@@ -448,7 +457,17 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
                     hp.mollview(eff_map, title=f"{runName} – {one_metric.metricName} Efficiency", unit='Efficiency', cmap='viridis')
                     hp.graticule()
                     plt.show()
-        
 
+        if clean_temp:
+            for cadence in cadences:
+                outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
+                print(f"[CLEANUP] Removing temp directory: {outDir}")
+                shutil.rmtree(outDir, ignore_errors=True)
     
     return df
+
+    if clean_temp:
+        for cadence in cadences:
+            outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
+            print(f"[CLEANUP] Removing temp directory: {outDir}")
+            shutil.rmtree(outDir, ignore_errors=True)

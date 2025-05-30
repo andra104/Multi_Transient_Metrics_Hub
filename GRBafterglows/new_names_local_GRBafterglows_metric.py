@@ -160,6 +160,40 @@ def generate_Templates(
         pickle.dump({'lightcurves': lc_model.data}, f)
     print(f"Saved synthetic GRB light curve templates to {save_to}")
 
+# --------------------------------------------
+# Light Curve Loader (used in scripts)
+# --------------------------------------------
+def load_or_generate_templates(templates_file="GRBAfterglow_templates.pkl",
+                               num_samples=100, num_lightcurves=1000,
+                               generate_new=False):
+    """
+    Load GRB light curve templates from a file, or generate and save new ones.
+
+    Parameters
+    ----------
+    templates_file : str
+        Path to the .pkl file containing light curves.
+    num_samples : int
+        Number of time samples in each light curve.
+    num_lightcurves : int
+        Number of unique light curve templates to simulate.
+    generate_new : bool
+        Whether to generate and save new templates.
+
+    Returns
+    -------
+    LC instance
+        The loaded or newly generated light curve model.
+    """
+    if generate_new or not os.path.exists(templates_file):
+        print(f"[INFO] Generating {num_lightcurves} light curve templates.")
+        generate_Templates(num_samples=num_samples,
+                           num_lightcurves=num_lightcurves,
+                           save_to=templates_file)
+    else:
+        print(f"[INFO] Loading light curve templates from {templates_file}.")
+    return LC(load_from=templates_file)
+
 
 # --------------------------------------------
 # Base GRB Metric with extinction and SNR
@@ -624,6 +658,27 @@ class GRBAfterglowHistoricalMatchMetric(Base_Metric):
             return 1.0  # Would stand out above archival image
         return 0.0
 
+# --------------------------------------------
+# Multi_Metric Standardized Call
+# --------------------------------------------
+def get_multi_metrics(lc_model, include=None):
+    """
+    Return a list of metrics. `include` can be a list of metric names to include.
+    """
+    all_metrics = {
+        'detect': Detect_Metric(lc_model=lc_model),
+        'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model),
+        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model),
+        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model),
+        'color_evolve': GRBAfterglowColorEvolveMetric(lc_model=lc_model),
+        'historical': GRBAfterglowHistoricalMatchMetric(lc_model=lc_model)
+    }
+
+    if include is None:
+        return list(all_metrics.values())
+    else:
+        return [all_metrics[name] for name in include if name in all_metrics]
+
 
 # --------------------------------------------
 # GRB volumetric rate model (on-axis ≈ 10⁻⁹ Mpc⁻³ yr⁻¹)
@@ -656,6 +711,63 @@ def sample_grb_rate_from_volume(t_start, t_end, d_min, d_max, rate_density=1e-8)
 
     V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
     return np.random.poisson(rate_density * V * years)
+
+# --------------------------------------------
+# Population Loader (used in scripts)
+# --------------------------------------------
+def load_or_generate_population(t_start=1, t_end=3652, seed=42,
+                                d_min=10, d_max=1000,
+                                num_lightcurves=1000,
+                                gal_lat_cut=None, rate_density=1e-8,
+                                pop_file="GRB_population_fixedpop.pkl",
+                                generate_new=False,
+                                make_debug_plots=False):
+    """
+    Load GRB population from a saved file or generate a new one.
+
+    Parameters
+    ----------
+    t_start : float
+        Start time in days since survey start.
+    t_end : float
+        End time in days since survey start.
+    seed : int
+        RNG seed.
+    d_min, d_max : float
+        Minimum and maximum luminosity distances (Mpc).
+    num_lightcurves : int
+        Number of templates available.
+    gal_lat_cut : float or None
+        Optional minimum Galactic latitude (deg).
+    rate_density : float
+        Volumetric rate in Mpc⁻³ yr⁻¹.
+    pop_file : str
+        Path to save or load population.
+    generate_new : bool
+        If True, regenerate population and overwrite.
+    make_debug_plots : bool
+        If True, show debug histograms.
+
+    Returns
+    -------
+    UserPointsSlicer
+        Slicer with populated slice_points metadata.
+    """
+    if generate_new or not os.path.exists(pop_file):
+        print(f"[INFO] Generating GRB population and saving to {pop_file}")
+        slicer = generate_PopSlicer(t_start=t_start, t_end=t_end,
+                                    d_min=d_min, d_max=d_max,
+                                    seed=seed,
+                                    num_lightcurves=num_lightcurves,
+                                    gal_lat_cut=gal_lat_cut,
+                                    rate_density=rate_density,
+                                    save_to=pop_file,
+                                    make_debug_plots=make_debug_plots)
+    else:
+        print(f"[INFO] Loading GRB population from {pop_file}")
+        slicer = generate_PopSlicer(load_from=pop_file)
+
+    return slicer
 
     
 # --------------------------------------------
@@ -742,7 +854,8 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
     #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
     #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
     
-        print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
+        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
+        print("[DEBUG 7]: Do you see me")
 
 
     #coords = SkyCoord(ra=slicer.slice_points['ra'] * u.deg, dec=slicer.slice_points['dec'] * u.deg, frame='icrs') - this code just labels them as deg. u.deg doesn't convert them. 
@@ -796,5 +909,44 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
         print(f"Saved GRB population to {save_to}")
 
     return slicer
+
+# --------------------------------------------
+# Standardized GRB storage paths (used in scripts)
+# --------------------------------------------
+def get_output_paths(case_label="GRBafterglows"):
+    """
+    Generate standardized output filenames and directory paths for this science case.
+
+    Parameters
+    ----------
+    case_label : str
+        Short name for this science case (used to define subfolder).
+        Examples: 'GRBafterglows', 'KNe', 'LFBOTs', etc.
+
+    Returns
+    -------
+    dict
+        Dictionary with standardized paths:
+            - 'case_label'
+            - 'storage_dir'
+            - 'templates_file'
+            - 'pop_file'
+    """
+    # Force base_dir to be .../Multi_Transient_Metrics_Hub/output
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
+
+    storage_dir = os.path.join(base_dir, case_label)
+    templates_file = os.path.join(storage_dir, f"{case_label}_templates.pkl")
+    pop_file = os.path.join(storage_dir, f"{case_label}_population.pkl")
+
+    os.makedirs(storage_dir, exist_ok=True)
+    return {
+        'case_label': case_label,
+        'storage_dir': storage_dir,
+        'templates_file': templates_file,
+        'pop_file': pop_file
+    }
+
+
 
     
