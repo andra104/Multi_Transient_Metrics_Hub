@@ -221,14 +221,24 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         
         # Now save
         df_obs.to_csv(os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"), index=False)
+
+        #n_filters_detected_per_event = np.array([
+            #sum(per_filter_metrics[f"Detect_{f}"].metric_values[i] == 1 
+                #and not per_filter_metrics[f"Detect_{f}"].metric_values.mask[i]
+                #for f in filters)
+            #for i in range(n_events)
+        #])
+            
     
-    
-        n_filters_detected_per_event = np.array([
-            sum(per_filter_metrics[f"Detect_{f}"].metric_values[i] == 1 
-                and not per_filter_metrics[f"Detect_{f}"].metric_values.mask[i]
-                for f in filters)
-            for i in range(n_events)
-        ])
+        n_filters_detected_per_event = np.zeros(n_events, dtype=int)
+        
+        for sid, record in detect_metric.obs_records.items():
+            if record.get("detected", False):
+                # Count unique filters used in observations above SNR threshold
+                filt_arr = np.array(record.get("filter", []))
+                snr_arr = np.array(record.get("snr_obs", []))
+                good = snr_arr >= 5
+                n_filters_detected_per_event[int(sid)] = len(np.unique(filt_arr[good]))
         
         detected_mask = n_filters_detected_per_event >= 1
         n_detected = np.sum(detected_mask)
@@ -314,7 +324,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
             plt.hist(df_obs["year"], bins=np.arange(0.5, 11.5, 1), edgecolor='black')
             plt.xticks(ticks=np.arange(1, 11), labels=[f"Year {i}" for i in range(1, 11)])
             plt.xlabel("Survey Year")
-            plt.ylabel("Number of Events")
+            plt.ylabel("Number of Events") 
             plt.title("Distribution of Peak Times")
             plt.grid(True)
             plt.tight_layout()

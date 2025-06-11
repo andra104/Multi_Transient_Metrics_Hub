@@ -32,3 +32,19 @@ Out of 437 simulated events, Rubin detected 21 under the four_roll_v4.3.1_10yrs 
 Of those, each event was observed in an average of 1.0 ± 0.0 filters.
 Out of 437 simulated events, Rubin detected 25 under the baseline_v4.3.1_10yrs cadence.
 Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 435 simulated events, Rubin detected 29 under the four_roll_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 435 simulated events, Rubin detected 20 under the baseline_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 415 simulated events, Rubin detected 12 under the four_roll_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 415 simulated events, Rubin detected 15 under the baseline_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 410 simulated events, Rubin detected 22 under the four_roll_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 410 simulated events, Rubin detected 16 under the baseline_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.0 ± 0.0 filters.
+Out of 419 simulated events, Rubin detected 18 under the four_roll_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 1.8 ± 1.0 filters.
+Out of 419 simulated events, Rubin detected 16 under the baseline_v4.3.1_10yrs cadence.
+Of those, each event was observed in an average of 2.1 ± 1.1 filters.
