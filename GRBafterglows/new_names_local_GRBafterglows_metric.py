@@ -532,33 +532,53 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
     This metric evaluates whether a GRB afterglow would be suitable for rapid spectroscopic follow-up.
     An event is considered triggerable if:
 
-    (1) At least 2 different filters detect the event with SNR ≥ 5,
-    (2) Both detections occur within 0.5 days (12 hours) after the light curve peak.
-
-    The thresholds are motivated by the observational window when afterglows are brightest and most
-    amenable to spectroscopy, as informed by studies of early GRB afterglow behavior (Zeh et al. 2005)
-    and typical response times for ground-based spectroscopic facilities.
-
-    Prioritizing early, multi-band detections ensures that spectra can be taken while the afterglow 
-    remains bright enough for classification and redshift determination.
+    (1) At least one filter shows brightness < 21 mag,
+    (2) It rises faster than 0.3 mag/day in that filter,
+    (3) Both detections used to assess this have SNR >= 5.
     """
     def __init__(self, **kwargs):
         super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs)
-        self.metricName = kwargs.get('metricName', 'GRB_Followup')
-        self.obs_records = {}  # <-- NEW: to store all detected event records individually
+        self.metricName = kwargs.get('metricName', 'GRB_SpecTrigger')
         self.parent_instance = Base_Metric()
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
-        if not detected:
-            detected = self.parent_instance.betterdetect(filters, snr, times, obs_record)
-        if detected:
-            within_half_day = times <= 0.5
-            early = (snr >= 5) & within_half_day
+        if obs_record is None or len(obs_record['mjd_obs']) < 2:
+            return 0.0
 
-            if len(np.unique(filters[early])) >= 2:
+        # Sort by time
+        sorted_idx = np.argsort(obs_record['mjd_obs'])
+        for key in obs_record:
+            if isinstance(obs_record[key], np.ndarray):
+                obs_record[key] = obs_record[key][sorted_idx]
+
+        mjd = obs_record['mjd_obs']
+        mags = obs_record['mag_obs']
+        snrs = obs_record['snr_obs']
+        filts = obs_record['filter']
+
+        for f in np.unique(filts):
+            f_mask = (filts == f)
+            if np.sum(f_mask) < 2:
+                continue
+
+            good = f_mask & (snrs >= 5)
+            if np.sum(good) < 2:
+                continue
+
+            t = mjd[good]
+            m = mags[good]
+
+            # Check rise rate
+            delta_mag = np.diff(m)
+            delta_time = np.diff(t)
+            rise_rate = delta_mag / delta_time  # Positive = fading, Negative = rising
+
+            #if np.any(rise_rate < -0.3) and np.any(m < 21): #we don't have fade rates atm
+            if np.any(np.abs(rise_rate) > 0.3) and np.any(m < 21): # triggers if any rapid brightness change (fading or rising) AND magnitude is bright enough
+
                 return 1.0
+
         return 0.0
 
 # --------------------------------------------
