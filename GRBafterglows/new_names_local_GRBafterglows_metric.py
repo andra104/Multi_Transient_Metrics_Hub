@@ -8,7 +8,7 @@ from rubin_sim.phot_utils import DustValues
 import sys
 import os
 sys.path.append(os.path.abspath(".."))
-from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix
+from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, get_distance_bounds
 
 from rubin_sim.maf.utils import m52snr
 import matplotlib.pyplot as plt
@@ -30,6 +30,60 @@ import pickle
 DEBUG = False
 MAXGAP = 1
 
+# -------------------------------------------
+# Applying correlation between filters 
+# -------------------------------------------
+
+def apply_spectral_index(mag_ref, filtername, ref_filter=None, beta=None):
+    """
+    Adjust magnitude based on spectral index β (Fν ∝ ν^β) to translate
+    from reference filter to target filter.
+
+    Parameters
+    ----------
+    mag_ref : float or array_like
+        Magnitude in the reference filter (e.g., r-band).
+    filtername : str
+        Target LSST filter (e.g., 'g', 'i').
+    ref_filter : str or None
+        Reference filter used to simulate the light curve. Default is from config.
+    beta : float or None
+        Spectral index. If None, uses value from GRB_CONFIG.
+
+    Returns
+    -------
+    mag_target : float or array_like
+        Adjusted magnitude in the target filter.
+    """
+    FILTER_CENTRAL_FREQS = {
+    'u': 8.088e+14,
+    'g': 6.293e+14,
+    'r': 4.844e+14,
+    'i': 3.979e+14,
+    'z': 3.461e+14,
+    'y': 3.080e+14,
+    }
+
+    # Global configuration for GRB metric
+    GRB_CONFIG = {
+        "reference_filter": "r",
+        "spectral_index_beta": -0.75  # default spectral slope
+    }
+
+    
+    if ref_filter is None:
+        ref_filter = GRB_CONFIG["reference_filter"]
+    if beta is None:
+        beta = GRB_CONFIG["spectral_index_beta"]
+
+    if filtername == ref_filter:
+        return mag_ref
+
+    nu_ref = FILTER_CENTRAL_FREQS[ref_filter]
+    nu_target = FILTER_CENTRAL_FREQS[filtername]
+    delta_mag = 2.5 * beta * np.log10(nu_target / nu_ref)
+    return mag_ref + delta_mag
+
     
 # --------------------------------------------
 # Power-law GRB afterglow model based on Zeh et al. (2005)
@@ -37,6 +91,7 @@ MAXGAP = 1
 class LC:
     """
     Simulate GRB afterglow light curves using a power-law model.
+    Peak mag range is now determined from Cenko et al. (2009) with redshift and k-correction 
 
     Light curves follow:
         m(t) = m_0 + 2.5 * alpha * log10(t/t_0)
@@ -68,7 +123,7 @@ class LC:
         #fbb adjusted to .01 because .1 day is actually significantly after peak already
 
         # decay_slope_range = (0.5, 2.5) #not using this anymore
-        peak_mag_range = (-24, -22)
+        peak_mag_range = (-32.676316, -19.291462) # old: -24, -22
 
         rng = np.random.default_rng(42)
         for _ in range(num_lightcurves):
@@ -113,31 +168,16 @@ class LC:
                 lc[f] = {'ph': self.t_grid, 'mag': mag}
             self.data.append(lc)
 
+
     def interp(self, t, filtername, lc_indx=0):
-        """
-        Interpolate the light curve for the given filter and index at times `t`.
-
-        Parameters
-        ----------
-        t : array_like
-            Times relative to peak (days).
-        filtername : str
-            LSST filter name (u, g, r, i, z, y).
-        lc_indx : int
-            Index of the light curve in the template set.
-
-        Returns
-        -------
-        magnitudes : array_like
-            Interpolated magnitudes, clipped at 99 for out-of-range.
-        """
-        if lc_indx >= len(self.data):
-            print(f"Warning: lc_indx {lc_indx} out of bounds, using last template.")
-            lc_indx = len(self.data) - 1
-        return np.interp(t,
-                         self.data[lc_indx][filtername]['ph'],
-                         self.data[lc_indx][filtername]['mag'],
-                         left=99, right=99)
+        mag_r = np.interp(
+            t,
+            self.data[lc_indx]["r"]['ph'],
+            self.data[lc_indx]["r"]['mag'],
+            left=99, right=99
+        )
+        return apply_spectral_index(mag_r, filtername)
+        
 
 # --------------------------------------------------
 # Light Curve Template Generator (Separate from Population)
@@ -574,108 +614,12 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
             delta_time = np.diff(t)
             rise_rate = delta_mag / delta_time  # Positive = fading, Negative = rising
 
-            #if np.any(rise_rate < -0.3) and np.any(m < 21): #we don't have fade rates atm
-            if np.any(np.abs(rise_rate) > 0.3) and np.any(m < 21): # triggers if any rapid brightness change (fading or rising) AND magnitude is bright enough
+            #if np.any(rise_rate < -0.3) and np.any(m < 21): #we don't have rise rates atm
+            #if np.any(np.abs(rise_rate) > 0.3) and np.any(m < 21): # triggers if any rapid brightness change (fading or rising) AND magnitude is bright enough
+            if np.any(m < 21): #assume rise rate is always that fast and detected.  
 
                 return 1.0
 
-        return 0.0
-
-# --------------------------------------------
-# Color Evolution Metric
-# Detects ≥2 epochs with multi-color information to constrain synchrotron cooling
-# --------------------------------------------
-class GRBAfterglowColorEvolveMetric(Base_Metric):
-    """
-    Color evolution detection metric for GRB Afterglows.
-
-    This metric assesses whether an event shows measurable color (spectral) evolution over time.
-    An event satisfies the criterion if:
-
-    (1) At least 4 observations are detected with SNR ≥ 3,
-    (2) These observations cluster into ≥ 2 distinct epochs (grouped at 0.5-day resolution),
-    (3) Each epoch includes detections in at least 2 different filters.
-
-    The detection of color evolution is critical for constraining synchrotron cooling breaks,
-    energy injection episodes, and jet structure in GRB afterglows. These requirements
-    are based on observational constraints for detecting chromatic breaks described in Zeh et al. (2005)
-    and adapted to Rubin's cadence characteristics.
-
-    By requiring multi-color detections across epochs, this metric distinguishes genuine 
-    evolving afterglows from static or non-evolving fast transients.
-    """
-    def __init__(self, **kwargs):
-        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs)
-        self.metricName = kwargs.get('metricName', 'GRB_ColorEvolution')
-        self.obs_records = {}  # <-- NEW: to store all detected event records individually
-
-    def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
-
-        detected = (snr >= 3)
-        if np.sum(detected) < 4:
-            return 0.0
-        
-        # Group by rounded times to cluster into epochs
-        t_epoch = np.round(times[detected] * 2) / 2  # bin to 0.5-day resolution
-        f_epoch = filters[detected]
-
-        epoch_colors = {}
-        for t, f in zip(t_epoch, f_epoch):
-            epoch_colors.setdefault(t, set()).add(f)
-
-        multi_color_epochs = [e for e in epoch_colors.values() if len(e) >= 2]
-
-        if len(multi_color_epochs) >= 2:
-            return 1.0
-        return 0.0
-
-# --------------------------------------------
-# Historical Non-Detection Match Metric
-# Checks whether the transient would stand out against deep coadds
-# --------------------------------------------
-class GRBAfterglowHistoricalMatchMetric(Base_Metric):
-    """
-    Archival non-detection match metric for GRB Afterglows.
-
-    This metric checks whether the transient would stand out as a new source compared
-    to deep archival imaging. An event passes if:
-
-    (1) Any portion of its light curve is brighter than the assumed archival coadd depth 
-        (default = 27.0 magnitudes).
-
-    This logic is based on the expectation that GRB afterglows have no persistent
-    optical counterparts prior to the event. The archival depth value reflects Rubin’s
-    expected Wide-Fast-Deep coadded survey depth.
-
-    This metric was designed to filter out background variable sources such as AGNs,
-    variable stars, or other contaminants that could otherwise mimic a GRB-like transient
-    in photometric detection pipelines.
-    """
-    def __init__(self, coaddDepth=27.0, **kwargs):
-        """
-        Parameters
-        ----------
-        coaddDepth : float
-            Simulated archival limiting magnitude.
-        """
-        self.coaddDepth = coaddDepth
-        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs)
-        self.metricName = kwargs.get('metricName', 'GRB_HistoricalMetric')
-        self.obs_records = {}  # <-- NEW: to store all detected event records individually
-
-    def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
-        # Check if any detection is brighter than the archival depth
-        mags = np.zeros(times.size)
-        for f in np.unique(filters):
-            mask = filters == f
-            mags[mask] = self.lc_model.interp(times[mask], f, slice_point['file_indx'])
-            mags[mask] += self.ax1[f] * slice_point['ebv']
-            mags[mask] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
-
-        if np.any(mags < self.coaddDepth):
-            return 1.0  # Would stand out above archival image
         return 0.0
 
 # --------------------------------------------
@@ -690,8 +634,6 @@ def get_multi_metrics(lc_model, include=None):
         'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model),
         'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model),
         'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model),
-        'color_evolve': GRBAfterglowColorEvolveMetric(lc_model=lc_model),
-        'historical': GRBAfterglowHistoricalMatchMetric(lc_model=lc_model)
     }
 
     if include is None:
@@ -703,7 +645,10 @@ def get_multi_metrics(lc_model, include=None):
 # --------------------------------------------
 # GRB volumetric rate model (on-axis ≈ 10⁻⁹ Mpc⁻³ yr⁻¹)
 # --------------------------------------------
-def sample_grb_rate_from_volume(t_start, t_end, d_min, d_max, rate_density=1e-8): #1e-8 to account for dirty fireball and off axis, 1e-9 without
+def sample_grb_rate_from_volume(t_start, t_end,
+                                d_min=None, d_max=None,
+                                z_min=None, z_max=None,
+                                rate_density=1e-8): #1e-8 to account for dirty fireball and off axis, 1e-9 without
     """
     Estimate the number of GRBs from comoving volume and volumetric rate.
 
@@ -725,10 +670,13 @@ def sample_grb_rate_from_volume(t_start, t_end, d_min, d_max, rate_density=1e-8)
     int
         Expected number of GRBs in the survey.
     """
-    years = (t_end - t_start) / 365.25
+
+    d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
+
     z_min = z_at_value(cosmo.comoving_distance, d_min * u.Mpc)
     z_max = z_at_value(cosmo.comoving_distance, d_max * u.Mpc)
 
+    years = (t_end - t_start) / 365.25
     V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
     return np.random.poisson(rate_density * V * years)
 
@@ -736,7 +684,8 @@ def sample_grb_rate_from_volume(t_start, t_end, d_min, d_max, rate_density=1e-8)
 # Population Loader (used in scripts)
 # --------------------------------------------
 def load_or_generate_population(t_start=1, t_end=3652, seed=42,
-                                d_min=10, d_max=1000,
+                                d_min=None, d_max=None,
+                                z_min=None, z_max=None,
                                 num_lightcurves=1000,
                                 gal_lat_cut=None, rate_density=1e-8,
                                 pop_file="GRB_population_fixedpop.pkl",
@@ -777,6 +726,7 @@ def load_or_generate_population(t_start=1, t_end=3652, seed=42,
         print(f"[INFO] Generating GRB population and saving to {pop_file}")
         slicer = generate_PopSlicer(t_start=t_start, t_end=t_end,
                                     d_min=d_min, d_max=d_max,
+                                    z_min = z_min, z_max = z_max,
                                     seed=seed,
                                     num_lightcurves=num_lightcurves,
                                     gal_lat_cut=gal_lat_cut,
@@ -794,7 +744,7 @@ def load_or_generate_population(t_start=1, t_end=3652, seed=42,
 # GRB population generator
 # --------------------------------------------
 def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
-                         d_min=10, d_max=1000, num_lightcurves=1000, gal_lat_cut=None, rate_density=1e-8,
+                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, gal_lat_cut=None, rate_density=1e-8,
                          load_from=None, save_to=None, make_debug_plots=True):
     """
     Generate a population of GRB afterglows with realistic extinction and sky distribution.
@@ -819,7 +769,8 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
         return slicer
 
     rng = np.random.default_rng(seed)
-    n_events = sample_grb_rate_from_volume(t_start, t_end, d_min, d_max, rate_density=rate_density)
+    d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
+    n_events = sample_grb_rate_from_volume(t_start, t_end, d_min, d_max, z_min, z_max, rate_density=rate_density)
     print(f"Simulated {n_events} GRB events using rate_density = {rate_density:.1e}")
 
     

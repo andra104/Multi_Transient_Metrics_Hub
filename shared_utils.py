@@ -13,6 +13,10 @@ from rubin_sim.phot_utils import DustValues
 import rubin_sim.maf.metrics as metrics
 from rubin_sim import maf
 import shutil
+from astropy.cosmology import Planck18 as cosmo
+import astropy.units as u
+from astropy.cosmology import z_at_value
+
 
 
 dust_model = DustValues()
@@ -118,6 +122,7 @@ def plot_some_lcs_from_pkl(templates_file, num=3):
         plt.ylabel("abs mag")
         plt.ylim(*ylims[::-1])
         plt.show()
+
 
 
 # --------------------------------------------
@@ -348,6 +353,37 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         print(f"[CLEANUP] Removing temp directory: {outDir}")
         shutil.rmtree(outDir, ignore_errors=True)
 
+# --------------------------------------------
+# Helper function to apply either redshift or distance (directly)
+# --------------------------------------------
+
+def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
+    """
+    Return distance bounds in Mpc from either distance or redshift input.
+
+    Parameters
+    ----------
+    d_min, d_max : float or None
+        Distance bounds in Mpc.
+    z_min, z_max : float or None
+        Redshift bounds.
+
+    Returns
+    -------
+    (d_min_Mpc, d_max_Mpc) : tuple of floats
+    """
+
+    # If distances are provided, return them directly
+    if d_min is not None and d_max is not None:
+        return d_min, d_max
+
+    # Else convert redshifts to distances
+    if z_min is not None and z_max is not None:
+        d_min = cosmo.comoving_distance(z_min).to_value(u.Mpc)
+        d_max = cosmo.comoving_distance(z_max).to_value(u.Mpc)
+        return d_min, d_max
+
+    raise ValueError("You must provide either (d_min, d_max) or (z_min, z_max)")
 
 # --------------------------------------------
 # Run several metrics
