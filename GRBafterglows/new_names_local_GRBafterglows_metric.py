@@ -801,7 +801,7 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
-
+    
     distances = rng.uniform(d_min, d_max, n_events)
     peak_times = rng.uniform(t_start, t_end, n_events)
     file_indx = rng.integers(0, num_lightcurves, len(ra))

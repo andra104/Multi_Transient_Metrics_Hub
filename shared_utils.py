@@ -123,7 +123,39 @@ def plot_some_lcs_from_pkl(templates_file, num=3):
         plt.ylim(*ylims[::-1])
         plt.show()
 
+# --------------------------------------------
+# Helper function to apply either redshift or distance (directly)
+# --------------------------------------------
 
+def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
+    """
+    Return distance bounds in Mpc from either distance or redshift input.
+
+    Parameters
+    ----------
+    d_min, d_max : float or None
+        Distance bounds in Mpc.
+    z_min, z_max : float or None
+        Redshift bounds.
+
+    Returns
+    -------
+    (d_min_Mpc, d_max_Mpc) : tuple of floats
+    """
+
+    # If distances are provided, return them directly
+    if d_min is not None and d_max is not None:
+        return d_min, d_max
+
+    # Else convert redshifts to distances
+    if z_min is not None and z_max is not None:
+        d_min = cosmo.comoving_distance(z_min).to_value(u.Mpc)
+        d_max = cosmo.comoving_distance(z_max).to_value(u.Mpc)
+        print(f"[INFO] z_min = {z_min:.5f} → d_min = {d_min:.15f} Mpc")
+        print(f"[INFO] z_max = {z_max:.5f} → d_max = {d_max:.15f} Mpc")
+        return d_min, d_max
+
+    raise ValueError("You must provide either (d_min, d_max) or (z_min, z_max)")
 
 # --------------------------------------------
 # Run detect metric
@@ -336,6 +368,16 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
             plt.show()
 
             plt.figure(figsize=(8, 4))
+            plt.bar(df_detected_per_year["year"], df_detected_per_year["n_detected"], width=0.7, align='center', edgecolor='black')
+            plt.xticks(ticks=np.arange(1, 11), labels=[f"Year {i}" for i in range(1, 11)])
+            plt.xlabel("Survey Year")
+            plt.ylabel("Number of Detections") 
+            plt.title("Distribution of DETECTED Peak Times")
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+
+            plt.figure(figsize=(8, 4))
             plt.hist(np.degrees(slicer.slice_points['dec']), bins=50, alpha=0.5, label='Injected')
             plt.hist(np.degrees(np.array(decs)[detected_flags]), bins=50, alpha=0.8, label='Detected', color='red')
             plt.xlabel("Declination [deg]")
@@ -346,44 +388,12 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
             plt.tight_layout()
             plt.show()
     
-    return df_obs_arr #for the last cadence that ran
+    return df_obs_arr, df_detected_per_year #for the last cadence that ran
 
     
     if clean_temp:
         print(f"[CLEANUP] Removing temp directory: {outDir}")
         shutil.rmtree(outDir, ignore_errors=True)
-
-# --------------------------------------------
-# Helper function to apply either redshift or distance (directly)
-# --------------------------------------------
-
-def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
-    """
-    Return distance bounds in Mpc from either distance or redshift input.
-
-    Parameters
-    ----------
-    d_min, d_max : float or None
-        Distance bounds in Mpc.
-    z_min, z_max : float or None
-        Redshift bounds.
-
-    Returns
-    -------
-    (d_min_Mpc, d_max_Mpc) : tuple of floats
-    """
-
-    # If distances are provided, return them directly
-    if d_min is not None and d_max is not None:
-        return d_min, d_max
-
-    # Else convert redshifts to distances
-    if z_min is not None and z_max is not None:
-        d_min = cosmo.comoving_distance(z_min).to_value(u.Mpc)
-        d_max = cosmo.comoving_distance(z_max).to_value(u.Mpc)
-        return d_min, d_max
-
-    raise ValueError("You must provide either (d_min, d_max) or (z_min, z_max)")
 
 # --------------------------------------------
 # Run several metrics
