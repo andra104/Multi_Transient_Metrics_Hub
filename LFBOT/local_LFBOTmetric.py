@@ -5,6 +5,11 @@ from rubin_sim.maf.slicers import UserPointsSlicer
 from rubin_scheduler.data import get_data_dir #local
 from rubin_sim.phot_utils import DustValues
 
+import sys
+import os
+sys.path.append(os.path.abspath(".."))
+from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, get_distance_bounds
+
 from rubin_sim.maf.utils import m52snr
 import matplotlib.pyplot as plt
 from astropy.cosmology import Planck18 as cosmo
@@ -15,53 +20,20 @@ from dustmaps.sfd import SFDQuery
 import astropy.units as u
 import healpy as hp
 from astropy.cosmology import z_at_value
+from scipy.stats import truncnorm
 import numpy as np
 import glob
 import os
 
 import pickle 
 
-# --------------------------------------------------
-# Utility: Convert Galactic to Equatorial coordinates
-# --------------------------------------------------
-def equatorialFromGalactic(lon, lat):
-    gal = Galactic(l=lon * u.deg, b=lat * u.deg)
-    equ = gal.transform_to(ICRSFrame())
-    return equ.ra.deg, equ.dec.deg
-
-# -----------------------------------------------------------------------------
-# Local Utility: Uniform sky injection
-# -----------------------------------------------------------------------------
-def uniform_sphere_degrees(n_points, seed=None):
-
-    """
-    Generate RA, Dec uniformly over the celestial sphere.
-
-    Parameters
-    ----------
-    n_points : int
-        Number of sky positions.
-    seed : int or None
-        Random seed.
-
-    Returns
-    -------
-    ra : ndarray
-        Right Ascension in degrees.
-    dec : ndarray
-        Declination in degrees.
-    """
-    rng = np.random.default_rng(seed)
-    ra = rng.uniform(0, 360, n_points)
-    z = rng.uniform(-1, 1, n_points)  # uniform in cos(theta)
-    dec = np.degrees(np.arcsin(z))   # arcsin(z) gives uniform in solid angle
-    print("YAY! UNIFORM SPHERE!")
-    return ra, dec
+DEBUG = False
+MAXGAP = 1
 
 # --------------------------------------------
 # Light Curve Model for LFBOTs
 # --------------------------------------------
-class LFBOT_LC:
+class LC:
     """
     Generate synthetic light curves for Luminous Fast Blue Optical Transients (LFBOTs).
 
@@ -104,40 +76,69 @@ class LFBOT_LC:
         return np.interp(t, self.data[lc_indx][filtername]['ph'],
                          self.data[lc_indx][filtername]['mag'],
                          left=99, right=99)
+# --------------------------------------------------
+# Light Curve Template Loader
+# --------------------------------------------------
+def load_or_generate_templates(templates_file="LFBOT_templates.pkl",
+                               num_samples=100, num_lightcurves=1000,
+                               generate_new=False):
+    """
+    Load LFBOT light curve templates from file or generate new ones.
+
+    Parameters
+    ----------
+    templates_file : str
+        Path to the .pkl file.
+    generate_new : bool
+        Whether to generate and overwrite.
+    """
+    if generate_new or not os.path.exists(templates_file):
+        print(f"[INFO] Generating {num_lightcurves} light curve templates.")
+        load_or_generate_templates(num_samples=num_samples,
+                           num_lightcurves=num_lightcurves,
+                           save_to=templates_file)
+    else:
+        print(f"[INFO] Loading light curve templates from {templates_file}.")
+    return LC(load_from=templates_file)
+
 
 # --------------------------------------------------
-# Light Curve Template Generator (Separate from Population)
+# Population Loader 
 # --------------------------------------------------
-def generateLFBOTTemplates(
-    num_samples=100, num_lightcurves=1000,
-    save_to="LFBOT_templates.pkl"
-):
+def load_or_generate_population(t_start=1, t_end=3652, seed=42,
+                                d_min=10, d_max=1000,
+                                gal_lat_cut=None, num_lightcurves=1000,
+                                rate_density=420e-9,
+                                pop_file="LFBOT_population.pkl",
+                                generate_new=False,
+                                make_debug_plots=False):
     """
-    Generate synthetic LFBOT light curve templates and save to file.
-
-    Templates are modeled with rapid rise and fade timescales,
-    and only g and r bands are populated, consistent with LFBOT properties.
+    Load LFBOT population from file or generate a new one.
     """
-    if os.path.exists(save_to):
-        print(f"Found existing LFBOT templates at {save_to}. Not regenerating.")
-        return
-
-    lc_model = LFBOT_LC(num_samples=num_samples, num_lightcurves=num_lightcurves, load_from=None)
-    with open(save_to, "wb") as f:
-        pickle.dump({'lightcurves': lc_model.data}, f)
-    print(f" Saved synthetic LFBOT light curve templates to {save_to}")
+    if generate_new or not os.path.exists(pop_file):
+        print(f"[INFO] Generating LFBOT population and saving to {pop_file}")
+        slicer = generate_PopSlicer(t_start=t_start, t_end=t_end,
+                                    d_min=d_min, d_max=d_max,
+                                    seed=seed,
+                                    num_lightcurves=num_lightcurves,
+                                    gal_lat_cut=gal_lat_cut,
+                                    save_to=pop_file)
+    else:
+        print(f"[INFO] Loading LFBOT population from {pop_file}")
+        slicer = generate_PopSlicer(load_from=pop_file)
+    return slicer
 
 # --------------------------------------------
 # Base Metric for LFBOTs
 # --------------------------------------------
-class BaseLFBOTMetric(BaseMetric):
+class Base_Metric(BaseMetric):
     """
     Base metric class for evaluating LFBOT light curves against simulated observations.
 
     This class handles light curve interpolation, extinction correction, and signal-to-noise
     calculation, providing a standardized evaluation framework for derived LFBOT metrics.
     """
-    def __init__(self, metricName='BaseLFBOTMetric',
+    def __init__(self, metricName='Base_Metric',
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
                  filterCol='filter', nightCol='night',
                  mjd0=59853.5, outputLc=False, badval=-666,
@@ -147,7 +148,7 @@ class BaseLFBOTMetric(BaseMetric):
         if lc_model is not None:
             self.lc_model = lc_model
         else:
-            self.lc_model = LFBOT_LC(load_from=load_from)
+            self.lc_model = LC(load_from=load_from)
 
         self.ax1 = DustValues().ax1
         self.mjdCol = mjdCol
@@ -186,7 +187,7 @@ class BaseLFBOTMetric(BaseMetric):
 # --------------------------------------------
 # Detection Metric for LFBOTs
 # --------------------------------------------
-class LFBOTDetectMetric(BaseLFBOTMetric):
+class Detect_Metric(Base_Metric):
     """
     LFBOT Detection Metric
 
@@ -205,8 +206,9 @@ class LFBOTDetectMetric(BaseLFBOTMetric):
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.metricName = kwargs.get('metricName', 'LFBOT_Detect')
-        self.obs_records = {}
+        self.metricName = kwargs.get('metricName', 'Detect')
+        self.obs_records = {}  # <-- NEW
+        self.latest_obs_record = None
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_lc(dataSlice, slice_point, return_full_obs=True)
@@ -221,7 +223,6 @@ class LFBOTDetectMetric(BaseLFBOTMetric):
 
         detected = False
 
-        # Step 1: Select good detections (SNR ≥5)
         good = snr >= 5
         if np.sum(good) < 2:
             self.latest_obs_record = None
@@ -229,38 +230,22 @@ class LFBOTDetectMetric(BaseLFBOTMetric):
 
         times_good = times[good]
         filters_good = filters[good]
-
-        # Step 2: Check time separation between detections, with time span <6 days apart
         total_time_span = np.ptp(times_good)
-        if (total_time_span < 0.5/24) or (total_time_span > 6):
+        if (total_time_span < 0.5 / 24) or (total_time_span > 6):
             self.latest_obs_record = None
             return 0.0
 
-        # Step 3: Primary detection path: ≥2 filters detected
-        unique_filters = np.unique(filters_good)
-        if len(unique_filters) >= 2:
+        if len(np.unique(filters_good)) >= 2 or np.sum(good) >= 3:
             detected = True
 
-        # Step 4: Fallback detection path: ≥3 epochs detected
-        elif np.sum(good) >= 3:
-            detected = True
-
-        # Step 5: Save if detected
         if detected:
             detected_mask = snr >= 5
-            obs_record['detected'] = detected_mask
-            self.latest_obs_record = obs_record
+            obs_record['detected'] = bool(np.any(detected_mask))
 
-            first_det_mjd = np.nan
-            last_det_mjd = np.nan
-            rise_time = np.nan
-            fade_time = np.nan
-
-            if np.any(detected_mask):
-                first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
-                last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
-                rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
-                fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
+            first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
+            last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
+            rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
+            fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
 
             peak_index = np.argmin(obs_record['mag_obs'])
             peak_mjd = obs_record['mjd_obs'][peak_index]
@@ -279,19 +264,25 @@ class LFBOTDetectMetric(BaseLFBOTMetric):
                 'peak_mjd': peak_mjd,
                 'peak_mag': peak_mag,
                 'ebv': slice_point['ebv'],
+                'peak_time': slice_point['peak_time'],
+                'mjd_obs': obs_record.get('mjd_obs', np.array([])),
+                'mag_obs': obs_record.get('mag_obs', np.array([])),
+                'snr_obs': obs_record.get('snr_obs', np.array([])),
+                'filter': obs_record.get('filter', np.array([]))
             })
 
             self.obs_records[slice_point['sid']] = obs_record
+            self.latest_obs_record = obs_record
             return 1.0
-
         else:
             self.latest_obs_record = None
             return 0.0
 
+
 # --------------------------------------------
 # Characterization Metric for LFBOTs
 # --------------------------------------------
-class LFBOTCharacterizeMetric(BaseLFBOTMetric):
+class LFBOTCharacterizeMetric(Base_Metric):
     """
     Given the provided scientific context, we define a minimal photometric characterization
     criterion for Rubin LSST observations of Luminous Fast Blue Optical Transients (LFBOTs).
@@ -318,18 +309,26 @@ class LFBOTCharacterizeMetric(BaseLFBOTMetric):
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.metricName = kwargs.get('metricName', 'Characterize')
+        self.obs_records = {}  # <-- NEW
+        self.latest_obs_record = None
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_lc(dataSlice, slice_point, return_full_obs=True)
 
         good = snr >= 3
         if np.sum(good) < 4:
+            self.latest_obs_record = None
             return 0.0
         duration = np.ptp(times[good])
-
         if duration >= 3:
+            self.obs_records[slice_point['sid']] = obs_record
+            self.latest_obs_record = obs_record
             return 1.0
+
+        self.latest_obs_record = None
         return 0.0
+
         
 
 # --------------------------------------------
@@ -364,9 +363,25 @@ def sample_lfbot_rate(t_start, t_end, d_min, d_max, rate_density=420e-9):
     return np.random.poisson(rate_density * V * years)
 
 # --------------------------------------------
+# Multi_Metric Standardized Call
+# --------------------------------------------
+def get_multi_metrics(lc_model, include=None):
+    """
+    Return list of LFBOT metrics for multi-metric evaluation.
+    """
+    all_metrics = {
+        'detect': Detect_Metric(lc_model=lc_model),
+        'characterize': LFBOTCharacterizeMetric(lc_model=lc_model),
+    }
+    if include is None:
+        return list(all_metrics.values())
+    else:
+        return [all_metrics[name] for name in include if name in all_metrics]
+
+# --------------------------------------------
 # LFBOT Population Slicer Generator
 # --------------------------------------------
-def generateLFBOTPopSlicer(t_start=1, t_end=3652, seed=42,
+def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
                            d_min=10, d_max=1000, num_lightcurves=1000,
                            gal_lat_cut=None, load_from=None, save_to=None):
     """
@@ -440,4 +455,32 @@ def generateLFBOTPopSlicer(t_start=1, t_end=3652, seed=42,
         print(f"Saved LFBOT population to {save_to}")
 
     return slicer
+
+# --------------------------------------------------
+# Output Paths
+# --------------------------------------------------
+def get_output_paths(case_label="LFBOTs"):
+    """
+    Standard output paths for LFBOT analysis.
+
+    Returns
+    -------
+    dict with:
+        - 'case_label'
+        - 'storage_dir'
+        - 'templates_file'
+        - 'pop_file'
+    """
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
+    storage_dir = os.path.join(base_dir, case_label)
+    templates_file = os.path.join(storage_dir, f"{case_label}_templates.pkl")
+    pop_file = os.path.join(storage_dir, f"{case_label}_population.pkl")
+    os.makedirs(storage_dir, exist_ok=True)
+    return {
+        'case_label': case_label,
+        'storage_dir': storage_dir,
+        'templates_file': templates_file,
+        'pop_file': pop_file
+    }
+
 

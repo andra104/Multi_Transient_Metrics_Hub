@@ -34,10 +34,19 @@ MAXGAP = 1
 # Applying correlation between filters 
 # -------------------------------------------
 
-def apply_spectral_index(mag_ref, filtername, ref_filter=None, beta=None):
+def apply_spectral_index(mag_ref, filtername, ref_filter="Rc", beta=-0.75):
     """
-    Adjust magnitude based on spectral index β (Fν ∝ ν^β) to translate
-    from reference filter to target filter.
+    This function adjusts a magnitude from R_c to any Rubin filter assuming a power-law SED where F_ν ∝ ν^β.
+
+    We're working in AB magnitudes, so we don't need to convert to flux first — the zero-points cancel out.
+    The difference between magnitudes in two bands corresponds directly to the spectral slope:
+
+    Δm = 2.5 * β * log10(ν_target / ν_ref)
+
+    This is based on Cenko and other GRB afterglow spectral energy distributions that assume a constant β. We assume the reference
+    band is R_c, and the correction is applied to get estimated peak magnitudes in ugrizy.
+
+    Rc_freq = c / wavelength_Rc = 2.998e17 / 658
 
     Parameters
     ----------
@@ -56,25 +65,14 @@ def apply_spectral_index(mag_ref, filtername, ref_filter=None, beta=None):
         Adjusted magnitude in the target filter.
     """
     FILTER_CENTRAL_FREQS = {
-    'u': 8.088e+14,
-    'g': 6.293e+14,
-    'r': 4.844e+14,
-    'i': 3.979e+14,
-    'z': 3.461e+14,
-    'y': 3.080e+14,
+        'Rc': 2.99792458e17 / 658.0,  # Hz, R_c band
+        'u': 8.088e14,
+        'g': 6.293e14,
+        'r': 4.844e14,
+        'i': 3.979e14,
+        'z': 3.461e14,
+        'y': 3.080e14,
     }
-
-    # Global configuration for GRB metric
-    GRB_CONFIG = {
-        "reference_filter": "r",
-        "spectral_index_beta": -0.75  # default spectral slope
-    }
-
-    
-    if ref_filter is None:
-        ref_filter = GRB_CONFIG["reference_filter"]
-    if beta is None:
-        beta = GRB_CONFIG["spectral_index_beta"]
 
     if filtername == ref_filter:
         return mag_ref
@@ -84,13 +82,36 @@ def apply_spectral_index(mag_ref, filtername, ref_filter=None, beta=None):
     delta_mag = 2.5 * beta * np.log10(nu_target / nu_ref)
     return mag_ref + delta_mag
 
+# -------------------------------------------
+# Generate Single Light Curve from Rc Parameters
+# -------------------------------------------
+def generate_grb_lc_from_rc(mag_peak_rc, alpha, t_jetbreak):
+    """
+    Generate a GRB light curve based on peak Rc mag, decay slope, and jet break.
+    """
+    t_grid = np.array([0.01, t_jetbreak, 100])  # days
+    mag_grid = np.zeros_like(t_grid)
+
+    # Enforce initial point is the peak
+    mag_grid[0] = mag_peak_rc
+
+    # Pre-break power-law decay
+    mag_grid[1] = mag_grid[0] + 2.5 * alpha * np.log10(t_jetbreak / 0.01)
+
+    # Post-break segment: steeper decline
+    t_end = t_grid[2]
+    new_decay = 10 * (np.log10(t_end + 1)) - 10 * (np.log10(t_jetbreak + 1))
+    mag_grid[2] = mag_grid[1] + new_decay
+
+    return t_grid, mag_grid
     
 # --------------------------------------------
-# Power-law GRB afterglow model based on Zeh et al. (2005)
+# Power-law GRB afterglow model based on Zeh et al. (2005) - Rc reference 
 # --------------------------------------------
 class LC:
     """
-    Simulate GRB afterglow light curves using a power-law model.
+    Simulate GRB afterglow light curves with Rc reference band using power-law + break.
+    Stores light curves in ugrizy using spectral index from Rc.
     Peak mag range is now determined from Cenko et al. (2009) with redshift and k-correction 
 
     Light curves follow:
@@ -100,83 +121,50 @@ class LC:
 
     The light curve begins at peak magnitude, and the decay is positive (fading).
     """
-    def __init__(self, num_samples=100, num_lightcurves=1000, load_from=None):
-        """
-        Parameters
-        ----------
-        num_samples : int
-            Number of time points to sample in the light curve (log-uniformly spaced).
-        load_from : str or None
-            If provided and valid, loads light curve templates from a pickle file.
-        """
+    def __init__(self, num_lightcurves=1000, load_from=None):
+        self.filts = ['u', 'g', 'r', 'i', 'z', 'y']
+        self.data = []
+        self.t_grid = None  # Set per-lightcurve
+
         if load_from and os.path.exists(load_from):
             with open(load_from, 'rb') as f:
-                data = pickle.load(f)
-            self.data = data['lightcurves']
-            self.filts = list(self.data[0].keys())
+                obj = pickle.load(f)
+            self.data = obj['lightcurves']
+            self.t_grid = obj['t_grid']
             print(f"Loaded GRB afterglow templates from {load_from}")
             return
 
-        self.data = []
-        self.filts = ["u", "g", "r", "i", "z", "y"]
-        self.t_grid = np.logspace(-2, 2, num_samples) # 0.1 to 100 days
-        #fbb adjusted to .01 because .1 day is actually significantly after peak already
-
-        # decay_slope_range = (0.5, 2.5) #not using this anymore
-        peak_mag_range = (-32.676316, -19.291462) # old: -24, -22
-
         rng = np.random.default_rng(42)
+        peak_mag_range = (-31.6, -18.47)
+
         for _ in range(num_lightcurves):
+            # --- Draw intrinsic Rc properties
+            mag_peak_rc = rng.uniform(*peak_mag_range)
+
+            a, b = (.5 - 1.5) / .5, (1.7 - 1.5) / .5
+            trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
+            alpha_fade = trunc_alpha.rvs(random_state=rng)
+
+            t_jetbreak = rng.uniform(1, 5)  # Days
+
+            # --- Build Rc light curve
+            t_vals, mag_rc = generate_grb_lc_from_rc(mag_peak_rc, alpha_fade, t_jetbreak)
+            self.t_grid = t_vals
+
+            # --- Project to other filters using spectral index
             lc = {}
             for f in self.filts:
-                m0 = rng.uniform(*peak_mag_range)
-                #alpha_fade = rng.uniform(*decay_slope_range)
-                
-                # Parameters of truncted normal: mean = 1.3, std = 0.3, range = [0.5, 2.5]
-                # a, b = (0.5 - 1.3) / 0.3, (2.5 - 1.3) / 0.3
-                # trunc_alpha = truncnorm(a=a, b=b, loc=1.3, scale=0.3)
-
-                #shar - this section works okay
-                # mean = 4, std = 1, range = [2.5, 5]
-                # a, b = (2.5 - 4) / .5, (5 - 4) / .5
-                # trunc_alpha = truncnorm(a=a, b=b, loc=4, scale=.5)
-
-                t_jetbreak = np.logspace(0.01, 0.7, 100) #jet break timing (3 times faster decay) between 1 and 5 days
-                
-                jetbreak = np.random.choice(t_jetbreak) # FBB added May 21
-                
-                #shar numbers based off Zeh 2005 (different Zeh 2005 though)
-                a, b = (.5 - 1.5) / .5, (1.7 - 1.5) / .5
-                trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
-                
-                alpha_fade = trunc_alpha.rvs(random_state=rng)
-
-                adjusted_m0 = m0 - 2.5 * alpha_fade * np.log10(self.t_grid )[0]
-                #shar adjusting so that the first mag is in our peak range
-                mag = adjusted_m0 + 2.5 * alpha_fade * np.log10(self.t_grid )
-
-                 # FBB now replace tail with post-jet break
-                mask = self.t_grid > jetbreak #only dates after the jet break
-                _ = [True if mask[i+1] else False for i,m in enumerate(mask[:-1])] 
-                mask[:-1] = _
-
-                new_decay = 10 * (np.log10(self.t_grid[mask] + 1)) 
-                if mask[0] == True:
-                    mask[0] = False
-                mag[mask] =  new_decay - new_decay[0] + mag[~mask][-1]
-
-                lc[f] = {'ph': self.t_grid, 'mag': mag}
+                mag_filt = apply_spectral_index(mag_rc, f, ref_filter="Rc", beta=-0.75)
+                lc[f] = {"ph": t_vals, "mag": mag_filt}
             self.data.append(lc)
 
-
     def interp(self, t, filtername, lc_indx=0):
-        mag_r = np.interp(
+        return np.interp( #interpolate 
             t,
-            self.data[lc_indx]["r"]['ph'],
-            self.data[lc_indx]["r"]['mag'],
-            left=99, right=99
+            self.data[lc_indx][filtername]["ph"],
+            self.data[lc_indx][filtername]["mag"],
+            left=99, right=99,
         )
-        return apply_spectral_index(mag_r, filtername)
         
 
 # --------------------------------------------------
@@ -194,10 +182,10 @@ def generate_Templates(
     #     return
     #shar - i want this to be a keyword argument not a default
 
-    lc_model = LC(num_samples=num_samples, num_lightcurves=num_lightcurves,
-                              load_from=None)
+    lc_model = LC(num_lightcurves=num_lightcurves, load_from=None)
     with open(save_to, "wb") as f:
-        pickle.dump({'lightcurves': lc_model.data}, f)
+        pickle.dump({'lightcurves': lc_model.data, 't_grid': lc_model.t_grid}, f)
+
     print(f"Saved synthetic GRB light curve templates to {save_to}")
 
 # --------------------------------------------
@@ -679,6 +667,60 @@ def sample_grb_rate_from_volume(t_start, t_end,
     years = (t_end - t_start) / 365.25
     V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
     return np.random.poisson(rate_density * V * years)
+
+# --------------------------------------------
+# Population Loader (used in scripts)
+# --------------------------------------------
+def build_grb_population_filename(config, lc_model, base_dir, prefix="GRBafterglow_pop", label=""):
+    """
+    Construct a filename for the GRB population file based on config + LC params.
+
+    Parameters
+    ----------
+    config : dict
+        Contains 'rate_density', 'z_min/z_max' or 'd_min/d_max'.
+    lc_model : LC object
+        Must contain .peak_mag_range, .t_jet_range, .beta
+    base_dir : str
+        Folder to store the population file.
+    prefix : str
+        Prefix for the filename (e.g., 'GRBafterglow_pop').
+    label : str
+        Optional extra tag (e.g., '_fixed', '_v2')
+
+    Returns
+    -------
+    str : Full population filename path
+    """
+    # Extract model params
+    mag_range = lc_model.peak_mag_range
+    tjet_start, tjet_end = lc_model.t_jet_range
+    beta = lc_model.beta
+
+    # Extract config
+    rate_density = config.get("rate_density")
+    z_min = config.get("z_min")
+    z_max = config.get("z_max")
+    d_min = config.get("d_min")
+    d_max = config.get("d_max")
+
+    # Build strings
+    mag_str = f"{mag_range[0]:.1f}--{mag_range[1]:.1f}"
+    tjet_str = f"{tjet_start:.1f}-{tjet_end:.1f}"
+    beta_str = f"{abs(beta):.2f}"
+    rate_str = f"rd{rate_density:.0e}".replace("-", "m") if rate_density is not None else "rdUnknown"
+
+    if z_min is not None and z_max is not None:
+        dist_str = f"z{z_min:.3f}-{z_max:.3f}"
+    elif d_min is not None and d_max is not None:
+        dist_str = f"d{int(d_min)}-{int(d_max)}Mpc"
+    else:
+        dist_str = "dUnknown"
+
+    filename = f"{prefix}_{rate_str}_{dist_str}_mag_{mag_str}_tjet{tjet_str}_beta{beta_str}{label}.pkl"
+    return os.path.join(base_dir, filename)
+
+
 
 # --------------------------------------------
 # Population Loader (used in scripts)
