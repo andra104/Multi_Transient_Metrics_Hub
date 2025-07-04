@@ -107,20 +107,23 @@ def plot_some_lcs_from_pkl(templates_file, num=3):
     lcdict = pickle.load(open(templates_file, "rb"))
     for i in range(num):
         plt.plot(np.log10(lcdict["lightcurves"][i]['u']['ph']+1e-5),
-                         lcdict["lightcurves"][i]['u']['mag'], color='k')
-        plt.plot(np.log10(lcdict["lightcurves"][i]['u']['ph']+1e-5),
-                          lcdict["lightcurves"][i]['g']['mag'], color='b')
-        plt.plot(np.log10(lcdict["lightcurves"][i]['u']['ph']+1e-5),
-                          lcdict["lightcurves"][i]['r']['mag'], color='g')
-        plt.plot(np.log10(lcdict["lightcurves"][i]['u']['ph']+1e-5),
-                          lcdict["lightcurves"][i]['i']['mag'], color='r')
-        plt.plot(np.log10(lcdict["lightcurves"][i]['u']['ph']+1e-5),
-                        lcdict["lightcurves"][i]['z']['mag'], color='brown')
+                         lcdict["lightcurves"][i]['u']['mag'], color='k',label="u")
+        plt.plot(np.log10(lcdict["lightcurves"][i]['g']['ph']+1e-5),
+                          lcdict["lightcurves"][i]['g']['mag'], color='b',label="g")
+        plt.plot(np.log10(lcdict["lightcurves"][i]['r']['ph']+1e-5),
+                          lcdict["lightcurves"][i]['r']['mag'], color='g',label="r")
+        plt.plot(np.log10(lcdict["lightcurves"][i]['i']['ph']+1e-5),
+                          lcdict["lightcurves"][i]['i']['mag'], color='r',label="i")
+        plt.plot(np.log10(lcdict["lightcurves"][i]['z']['ph']+1e-5),
+                        lcdict["lightcurves"][i]['z']['mag'], color='magenta',label="z")
+        plt.plot(np.log10(lcdict["lightcurves"][i]['y']['ph']+1e-5),
+                        lcdict["lightcurves"][i]['y']['mag'], color='yellow',label="y")
         ylims = plt.ylim()
         plt.title("Light curves from pkl file: #"+str(i))
         plt.xlabel("log time (days)")
         plt.ylabel("abs mag")
         plt.ylim(*ylims[::-1])
+        plt.legend()
         plt.show()
 
 # --------------------------------------------
