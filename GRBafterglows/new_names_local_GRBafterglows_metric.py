@@ -230,10 +230,10 @@ class Base_Metric(BaseMetric):
     def __init__(self, metricName='BaseGRBAfterglowMetric',
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
                  filterCol='filter', nightCol='night',
-                 mjd0=59853.5, outputLc=False, badval=-666,
+                 mjd0=60980.5, outputLc=False, badval=-666,
                  filter_include=None,
                  load_from="GRBAfterglow_templates.pkl",
-                 lc_model=None,  # <-- NEW
+                 lc_model=None, use_extinction=True,  # <-- NEW
                  **kwargs):
         """
         Parameters
@@ -254,6 +254,8 @@ class Base_Metric(BaseMetric):
         self.mjd0 = mjd0
         self.outputLc = outputLc
         self.filter_include = filter_include
+        self.use_extinction = use_extinction
+
 
         cols = [mjdCol, m5Col, filterCol, nightCol]
         super().__init__(col=cols, metric_name=metricName,
@@ -274,7 +276,11 @@ class Base_Metric(BaseMetric):
         for f in np.unique(dataSlice[self.filterCol]):
             infilt = np.where(dataSlice[self.filterCol] == f)
             mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
-            mags[infilt] += self.ax1[f] * slice_point['ebv']
+            if self.use_extinction:
+                mags[infilt] += self.ax1[f] * slice_point['ebv']
+                print("EBV included")
+
+            #mags[infilt] += self.ax1[f] * slice_point['ebv']
             mags[infilt] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
     
         snr = m52snr(mags, dataSlice[self.m5Col])

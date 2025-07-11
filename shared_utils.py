@@ -105,24 +105,21 @@ def plot_some_lcs_from_pkl(templates_file, num=3):
     num is how many we plot, starting at the beginning of the file
     '''
     lcdict = pickle.load(open(templates_file, "rb"))
+    filters = ['u', 'g', 'r', 'i', 'z', 'y']
+    colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
+
     for i in range(num):
-        plt.plot(np.log10(lcdict["lightcurves"][i]['u']['ph']+1e-5),
-                         lcdict["lightcurves"][i]['u']['mag'], color='k',label="u")
-        plt.plot(np.log10(lcdict["lightcurves"][i]['g']['ph']+1e-5),
-                          lcdict["lightcurves"][i]['g']['mag'], color='b',label="g")
-        plt.plot(np.log10(lcdict["lightcurves"][i]['r']['ph']+1e-5),
-                          lcdict["lightcurves"][i]['r']['mag'], color='g',label="r")
-        plt.plot(np.log10(lcdict["lightcurves"][i]['i']['ph']+1e-5),
-                          lcdict["lightcurves"][i]['i']['mag'], color='r',label="i")
-        plt.plot(np.log10(lcdict["lightcurves"][i]['z']['ph']+1e-5),
-                        lcdict["lightcurves"][i]['z']['mag'], color='magenta',label="z")
-        plt.plot(np.log10(lcdict["lightcurves"][i]['y']['ph']+1e-5),
-                        lcdict["lightcurves"][i]['y']['mag'], color='yellow',label="y")
-        ylims = plt.ylim()
-        plt.title("Light curves from pkl file: #"+str(i))
+        for f in filters:
+            plt.plot(
+                np.log10(lcdict["lightcurves"][i][f]['ph'] + 1e-5),
+                lcdict["lightcurves"][i][f]['mag'],
+                color=colors[f],
+                label=f if i == 0 else None  # Add label only once
+            )
+        plt.title(f"Light curve template #{i}")
         plt.xlabel("log time (days)")
-        plt.ylabel("abs mag")
-        plt.ylim(*ylims[::-1])
+        plt.ylabel("absolute mag")
+        plt.gca().invert_yaxis()
         plt.legend()
         plt.show()
 
@@ -164,7 +161,7 @@ def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
 # Run detect metric
 # --------------------------------------------
 
-def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, debug=True, plot=True, clean_temp=False):
+def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, debug=True, plot=True, clean_temp=False, use_extinction=True):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -209,7 +206,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         filters = ['all']
         for filt in filters:
             detect = metric.Detect_Metric(metricName=f"Detect_{filt}", #filter_include=[filt], 
-                                             lc_model=shared_lc_model)
+                                             lc_model=shared_lc_model, use_extinction=use_extinction)
                         #GRBAfterglowSpecTriggerableMetric(metricName=f"GRB_Detect_{filt}", filter_include=[filt], 
                         #                      lc_model=shared_lc_model)
             if ignore_triples == True:
@@ -306,10 +303,10 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
                 ebv = slicer.slice_points['ebv'][i]
                 file_indx = slicer.slice_points['file_indx'][i]
                 
-                m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag'])
+                m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag']) #detected events are plotted at their true peak magnitude go to m_app
                 A = ax1[filtername] * ebv
                 dm = 5 * np.log10(d * 1e6) - 5
-                m_app = m_peak + dm + A
+                m_app = m_peak + dm + A #m_app already uses the minimum (brightest) value of the light curve
              
                 ras.append(ra)
                 decs.append(dec)
