@@ -203,7 +203,7 @@ class BaseKNeMetric(BaseMetric):
     def __init__(self, metric_name='BaseKNeMetric',
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
                  filterCol='filter', nightCol='night',
-                 mjd0=59853.5, outputLc=False, badval=-666,
+                 mjd0=60980.5, outputLc=False, badval=-666,
                  filter_include=None,
                  load_from="kne_templates_used.pkl",
                  lc_model=None,

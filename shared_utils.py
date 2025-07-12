@@ -401,7 +401,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
 
 
 
-def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, plot=True, clean_temp=False):
+def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True):
     '''
     Runs the detect metric on given cadences and light curves
     

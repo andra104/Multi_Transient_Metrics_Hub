@@ -255,7 +255,7 @@ class Base_Metric(BaseMetric):
         self.outputLc = outputLc
         self.filter_include = filter_include
         self.use_extinction = use_extinction
-
+        self.extinction_printed = False
 
         cols = [mjdCol, m5Col, filterCol, nightCol]
         super().__init__(col=cols, metric_name=metricName,
@@ -276,9 +276,12 @@ class Base_Metric(BaseMetric):
         for f in np.unique(dataSlice[self.filterCol]):
             infilt = np.where(dataSlice[self.filterCol] == f)
             mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
+
             if self.use_extinction:
                 mags[infilt] += self.ax1[f] * slice_point['ebv']
-                print("EBV included")
+                if not self.extinction_printed:
+                    print("EBV included")
+                    self.extinction_printed = True
 
             #mags[infilt] += self.ax1[f] * slice_point['ebv']
             mags[infilt] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
@@ -293,6 +296,7 @@ class Base_Metric(BaseMetric):
                 'mag_obs': mags,
                 'snr_obs': snr,
                 'filter': filters,
+                
                 # NO 'detected' YET -- will be set later if detected!
             }
             
@@ -404,10 +408,11 @@ class Detect_Metric(Base_Metric):
             'ebv': slice_point['ebv'],
             'peak_time': slice_point['peak_time'],
             'detected': bool(detected),
-            'mjd_obs': obs_record.get('mjd_obs', np.array([])),
-            'mag_obs': obs_record.get('mag_obs', np.array([])),
-            'snr_obs': obs_record.get('snr_obs', np.array([])),
-            'filter': obs_record.get('filter', np.array([]))
+            'mag_obs': obs_record.get('mag_obs', np.array([])).tolist(),
+            'snr_obs': obs_record.get('snr_obs', np.array([])).tolist(),
+            'mjd_obs': obs_record.get('mjd_obs', np.array([])).tolist(),
+            'theta_obs': slice_point['theta_obs'],
+            'filter': obs_record.get('filter', np.array([])).tolist()
         })    
 
         self.obs_records[slice_point['sid']] = obs_record
@@ -499,6 +504,7 @@ class GRBAfterglowBetterDetectMetric(Base_Metric):
                 'mjd_obs': obs_record.get('mjd_obs', np.array([])),
                 'mag_obs': obs_record.get('mag_obs', np.array([])),
                 'snr_obs': obs_record.get('snr_obs', np.array([])),
+                'theta_obs': slice_point['theta_obs'],
                 'filter': obs_record.get('filter', np.array([]))
             })    
         
@@ -535,10 +541,11 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
     theoretical GRB afterglow light curves.
     """
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(**kwargs, use_extinction=use_extinction)
         self.metricName = kwargs.get('metricName', 'GRB_Characterize')
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric()
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
         
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
@@ -571,9 +578,10 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
     (3) Both detections used to assess this have SNR >= 5.
     """
     def __init__(self, **kwargs):
-        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs)
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs, use_extinction=use_extinction)
         self.metricName = kwargs.get('metricName', 'GRB_SpecTrigger')
-        self.parent_instance = Base_Metric()
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
@@ -619,15 +627,15 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 # --------------------------------------------
 # Multi_Metric Standardized Call
 # --------------------------------------------
-def get_multi_metrics(lc_model, include=None):
+def get_multi_metrics(lc_model, include=None, use_extinction=True):
     """
     Return a list of metrics. `include` can be a list of metric names to include.
     """
     all_metrics = {
-        'detect': Detect_Metric(lc_model=lc_model),
-        'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model),
-        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model),
-        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model),
+        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
+        'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction),
     }
 
     if include is None:
@@ -849,7 +857,7 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
-    
+    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
     distances = rng.uniform(d_min, d_max, n_events)
     peak_times = rng.uniform(t_start, t_end, n_events)
     file_indx = rng.integers(0, num_lightcurves, len(ra))
@@ -921,6 +929,9 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
     slicer.slice_points['ebv'] = ebv_vals
     slicer.slice_points['gall'] = coords.galactic.l.deg
     slicer.slice_points['galb'] = coords.galactic.b.deg
+    slicer.slice_points['theta_obs'] = theta_obs
+
+    
 
     if save_to:
         with open(save_to, 'wb') as f:
