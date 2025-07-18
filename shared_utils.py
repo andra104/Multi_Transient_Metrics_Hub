@@ -239,9 +239,6 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         # Now get the results
     
         df_obs = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
-
-        #if you want to keep the local version without turning arrays to lists
-        df_obs_arr = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
         
         # =======================================================================
         # Add calendar year assuming MJD0 = 59853.5 (LSST start)
@@ -252,42 +249,62 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
     
     
         # Convert problematic ndarray columns to lists before saving
-        #shar note - just use df_obs_arr if you want arrays
         for col in ['filter', 'mjd_obs', 'mag_obs', 'snr_obs']:
             df_obs[col] = df_obs[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
         
-        # Now save
-        df_obs.to_csv(os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"), index=False)
 
-        #n_filters_detected_per_event = np.array([
-            #sum(per_filter_metrics[f"Detect_{f}"].metric_values[i] == 1 
-                #and not per_filter_metrics[f"Detect_{f}"].metric_values.mask[i]
-                #for f in filters)
-            #for i in range(n_events)
-        #])
+
             
-    
-        n_filters_detected_per_event = np.zeros(n_events, dtype=int)
+        #Getting the number of filters detected per event
+        # n_filters_detected_per_event = np.zeros(n_events, dtype=int)
+        
+        # for sid, record in detect_metric.obs_records.items():
+        #     if record.get("detected", False):
+        #         # Count unique filters used in observations above SNR threshold
+        #         filt_arr = np.array(record.get("filter", []))
+        #         snr_arr = np.array(record.get("snr_obs", []))
+        #         good = snr_arr >= 5
+        #         n_filters_detected_per_event[int(sid)] = len(np.unique(filt_arr[good]))
+        
+        # detected_mask = n_filters_detected_per_event >= 1
+        # n_detected = np.sum(detected_mask)
+        # mean_filters = np.mean(n_filters_detected_per_event[detected_mask])
+        # std_filters = np.std(n_filters_detected_per_event[detected_mask])
+
+        n_observations_detected = []
+        n_filters_detected_per_event = []
+        n_filters_detected_per_detected_event = []
+        n_detected = 0 #with our criteria, not just with snr>5
+
+        #shar adding stuff here
         
         for sid, record in detect_metric.obs_records.items():
-            if record.get("detected", False):
-                # Count unique filters used in observations above SNR threshold
-                filt_arr = np.array(record.get("filter", []))
-                snr_arr = np.array(record.get("snr_obs", []))
-                good = snr_arr >= 5
-                n_filters_detected_per_event[int(sid)] = len(np.unique(filt_arr[good]))
+            # print(sid)
+            filt_arr = np.array(record.get("filter", []))
+            snr_arr = np.array(record.get("snr_obs", []))
+            good = snr_arr >= 5
+            n_filters_detected_per_event.append(len(np.unique(filt_arr[good])))
+            n_observations_detected.append(np.sum(good))
+            if record.get("detected", False): #for true detections
+                n_filters_detected_per_detected_event.append(len(np.unique(filt_arr[good])))
+                n_detected+=1
+                
+            
+        mean_filters = np.mean(n_filters_detected_per_detected_event)
+        std_filters = np.std(n_filters_detected_per_detected_event)        
         
-        detected_mask = n_filters_detected_per_event >= 1
-        n_detected = np.sum(detected_mask)
-        mean_filters = np.mean(n_filters_detected_per_event[detected_mask])
-        std_filters = np.std(n_filters_detected_per_event[detected_mask])
     
-        print(f"Out of {n_events} simulated events, Rubin detected {n_detected} under the {cadence} cadence.")
+        print(f"Out of {n_events} simulated events, with {len(obs_records)} events in visible positions (NOT SURE IF TRUE), Rubin detected {n_detected} under the {cadence} cadence.")
         print(f"Of those, each event was observed in an average of {mean_filters:.1f} ± {std_filters:.1f} filters.")
-        #shar i want this in a file but we should change it later
-        with open("output.txt", "a") as f:
-            print(f"Out of {n_events} simulated events, Rubin detected {n_detected} under the {cadence} cadence.", file=f)
-            print(f"Of those, each event was observed in an average of {mean_filters:.1f} ± {std_filters:.1f} filters.", file=f)
+        
+
+        df_obs['n_observations_detected'] = n_observations_detected
+        df_obs['n_filters_detected'] = n_filters_detected_per_event
+
+
+        # Now save
+        df_obs.to_csv(os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"), index=False)
+        print("Obs_Record dataframe saved to ",os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"))        
         
         if plot == True:
             # Plot: Apparent magnitude vs RA and Dec for one filter (e.g. 'r')
@@ -353,7 +370,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         outfile = os.path.join(storage_dir, f"local_efficiency_{cadence}.csv")
         with open(outfile, "w") as out:
             out.write("sid,n_filters_detected\n")
-            for i in range(n_events):
+            for i in range(len(df_obs)):
                 out.write(f"{i},{n_filters_detected_per_event[i]}\n")
         
         if plot == True:
@@ -388,7 +405,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
             plt.tight_layout()
             plt.show()
     
-    return df_obs_arr, df_detected_per_year #for the last cadence that ran
+    return df_obs #,df_detected_per_year 
 
     
     if clean_temp:
