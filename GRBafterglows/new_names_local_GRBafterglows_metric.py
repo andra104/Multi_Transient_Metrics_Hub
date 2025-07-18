@@ -146,7 +146,7 @@ class LC:
             alpha_fade = trunc_alpha.rvs(random_state=rng)
 
             t_jetbreak = rng.uniform(1, 5)  # Days
-
+            
             # --- Build Rc light curve
             t_vals, mag_rc = generate_grb_lc_from_rc(mag_peak_rc, alpha_fade, t_jetbreak)
             self.t_grid = t_vals
@@ -177,10 +177,6 @@ def generate_Templates(
     """
     Generate synthetic GRB afterglow light curve templates and save to file.
     """
-    # if os.path.exists(save_to):
-    #     print(f"Found existing GRB afterglow templates at {save_to}. Not regenerating.")
-    #     return
-    #shar - i want this to be a keyword argument not a default
 
     lc_model = LC(num_lightcurves=num_lightcurves, load_from=None)
     with open(save_to, "wb") as f:
@@ -301,6 +297,7 @@ class Base_Metric(BaseMetric):
             }
             
             return snr, filters, times, obs_record
+        # print("NOT RETURNING OBSRECORD SHAR")
         return snr, filters, times, None
 
     def detect(self, filters, snr, times, obs_record):
@@ -316,26 +313,7 @@ class Base_Metric(BaseMetric):
         
         return detected
 
-    def betterdetect(self, filters, snr, times, obs_record):
-        
-
-        mask = snr >= 5
-        t_detect = times[snr >= 5]
-        detected = False
-        if len(t_detect) > 2: # more than 2 detections
-            if len(np.unique(filters[mask])) >= 2 : #more than 2 filters
-                day1 = (times >= times[mask].min() + 2/24) * (times <= times[mask].min() + 1)
-                
-                
-        
-                if np.ptp(t_detect) >= 0.5 / 24 : #two detections in >30 min
-                    if len(times[day1]) > 2: #three detections in 1 night
-                        #np.diff(np.sort(times[day1])).max() <= MAXGAP: 
-                        #not the right logic: 
-                        #print(times[day1])
-                        detected = True
-        # Option B: ≥2 epochs, second has ≥2 filters; first can be a non-detection
-        return detected
+#shar removed betterdetect cause we don't use it
     
 
 # --------------------------------------------
@@ -361,12 +339,15 @@ class Detect_Metric(Base_Metric):
 
 
     def run(self, dataSlice, slice_point=None):
+        print("slice point: ",slice_point['sid'])
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
     
         if obs_record is None:
+            # print("OBSRECORD IS NONE SHAR")
             return self.badval
     
         if self.filter_include is not None:
+            # print("filter include stuff shar")
             keep = np.isin(filters, self.filter_include)
             snr = snr[keep]
             filters = filters[keep]
@@ -403,8 +384,8 @@ class Detect_Metric(Base_Metric):
             'ra': slice_point['ra'],
             'dec': slice_point['dec'],
             'distance_Mpc': slice_point['distance'],
-            'peak_mjd': peak_mjd,
-            'peak_mag': peak_mag,
+            'peak_mjd_observed': peak_mjd,
+            'peak_mag_observed': peak_mag,
             'ebv': slice_point['ebv'],
             'peak_time': slice_point['peak_time'],
             'detected': bool(detected),
@@ -421,101 +402,7 @@ class Detect_Metric(Base_Metric):
         return 1.0 if detected else 0.0
 
 
-class GRBAfterglowBetterDetectMetric(Base_Metric):
-    """ 
 
-    Option A: ≥2 detections in a single filter, ≥30 minutes apart
-    
-    Option B: ≥2 epochs, second has ≥2 filters; first can be a non-detection
-    
-    This is an “either/or” detection logic. 
-    
-    This event is detected if it passes either the intra-night multi-detection or the epoch-based detection criteria.
-    
-    """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.metricName = kwargs.get('metricName', 'GRB_BetterDetect')
-        self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric()
-
-    def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
-        
-        if self.filter_include is not None:
-            keep = np.isin(filters, self.filter_include)
-            snr = snr[keep]
-            filters = filters[keep]
-            times = times[keep]
-            for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
-                if isinstance(obs_record[k], np.ndarray):
-                    obs_record[k] = obs_record[k][keep]
-
-        # -------- Detection Logic --------
-        
-        detected = False
-    
-        # Option A: 2 detections in same filter ≥30min apart
-
-        #detected = self.parent_instance.detect(filters, snr, times, obs_record)
-        #if not detected:
-        detected = self.parent_instance.betterdetect(filters, snr, times, obs_record)
-        
-        
-        # -------- Save Detection Metadata --------
-    
-        if detected:
-            
-            detected_mask = snr >= 5 # FBB didnt you have this cut earlier too? why doubling it?
-            obs_record['detected'] = bool(np.any(detected_mask))
-            #self.latest_obs_record = obs_record
-
-            # Calculate and fade times
-            first_det_mjd = np.nan
-            last_det_mjd = np.nan
-            fade_time = np.nan
-        
-            if np.any(detected_mask):
-                first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
-                last_det_mjd = obs_record['mjd_obs'][detected_mask].max()
-                fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
-        
-            peak_index = np.argmin(obs_record['mag_obs'])
-            peak_mjd = obs_record['mjd_obs'][peak_index]
-            peak_mag = obs_record['mag_obs'][peak_index]
-
-            # Update obs_record with full metadata
-
-            obs_record.update({
-                'first_det_mjd': first_det_mjd,
-                'last_det_mjd': last_det_mjd,
-                #'rise_time_days': rise_time,
-                'fade_time_days': fade_time,
-                'sid': slice_point['sid'],
-                'file_indx': slice_point['file_indx'],
-                'ra': slice_point['ra'],
-                'dec': slice_point['dec'],
-                'distance_Mpc': slice_point['distance'],
-                'peak_mjd': peak_mjd,
-                'peak_mag': peak_mag,
-                'ebv': slice_point['ebv'],
-                'peak_time': slice_point['peak_time'],
-                'detected': bool(detected),
-                'mjd_obs': obs_record.get('mjd_obs', np.array([])),
-                'mag_obs': obs_record.get('mag_obs', np.array([])),
-                'snr_obs': obs_record.get('snr_obs', np.array([])),
-                'theta_obs': slice_point['theta_obs'],
-                'filter': obs_record.get('filter', np.array([]))
-            })    
-        
-            # Save this full event
-
-            self.obs_records[slice_point['sid']] = obs_record
-            self.latest_obs_record = obs_record if detected else None
-            return 1.0
-        else:
-            self.latest_obs_record = None
-            return 0.0
 
 
 # --------------------------------------------
@@ -633,7 +520,7 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
     """
     all_metrics = {
         'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
-        'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model, use_extinction=use_extinction),
+        # 'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model, use_extinction=use_extinction),
         'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
         'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction),
     }
