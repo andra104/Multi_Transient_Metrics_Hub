@@ -135,7 +135,8 @@ class LC:
             return
 
         rng = np.random.default_rng(42)
-        peak_mag_range = (-31.6, -18.47)
+        peak_mag_range = (-31.6, -18.47) 
+        # peak_mag_range = (-25.1,-25) #shar
 
         for _ in range(num_lightcurves):
             # --- Draw intrinsic Rc properties
@@ -377,7 +378,7 @@ class Detect_Metric(Base_Metric):
             'last_det_mjd': last_det_mjd,
             #'rise_time_days': rise_time,
             'fade_time_days': fade_time,
-            'sid': slice_point['sid'],
+            'sid_duplicate': slice_point['sid'],
             'file_indx': slice_point['file_indx'],
             'ra': slice_point['ra'],
             'dec': slice_point['dec'],
@@ -625,7 +626,7 @@ def build_grb_population_filename(config, lc_model, base_dir, prefix="GRBaftergl
 # --------------------------------------------
 # Population Loader (used in scripts)
 # --------------------------------------------
-def load_or_generate_population(t_start=1, t_end=3652, seed=42,
+def load_or_generate_population(use_extinction, t_start=1, t_end=3652, seed=42,
                                 d_min=None, d_max=None,
                                 z_min=None, z_max=None,
                                 num_lightcurves=1000,
@@ -666,7 +667,8 @@ def load_or_generate_population(t_start=1, t_end=3652, seed=42,
     """
     if generate_new or not os.path.exists(pop_file):
         print(f"[INFO] Generating GRB population and saving to {pop_file}")
-        slicer = generate_PopSlicer(t_start=t_start, t_end=t_end,
+        slicer = generate_PopSlicer(use_extinction=use_extinction, 
+                                    t_start=t_start, t_end=t_end,
                                     d_min=d_min, d_max=d_max,
                                     z_min = z_min, z_max = z_max,
                                     seed=seed,
@@ -685,8 +687,8 @@ def load_or_generate_population(t_start=1, t_end=3652, seed=42,
 # --------------------------------------------
 # GRB population generator
 # --------------------------------------------
-def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
-                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, gal_lat_cut=None, rate_density=1e-8,
+def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
+                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, gal_lat_cut=None, rate_density=1e-8, 
                          load_from=None, save_to=None, make_debug_plots=True):
     """
     Generate a population of GRB afterglows with realistic extinction and sky distribution.
@@ -791,7 +793,10 @@ def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
         plt.show()
 
     sfd = SFDQuery()
-    ebv_vals = sfd(coords)
+    if use_extinction:
+        ebv_vals = sfd(coords)
+    else:
+        ebv_vals = np.zeros(len(distances))
 
     if gal_lat_cut is not None:
         b = coords.galactic.b.deg

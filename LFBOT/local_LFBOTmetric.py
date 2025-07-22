@@ -76,9 +76,11 @@ class LC:
             duration_peak = rng.uniform(0, 4)  # flat peak duration in days
 
             mag_g = np.zeros_like(self.t_grid)
+            rise_slope = rng.uniform(0.25, 2.5)  # ✅ one value per LC
+
             for i, t in enumerate(self.t_grid):
                 if t < rise_time:
-                    mag_g[i] = m0_g + (rise_time - t) * rng.uniform(0.25, 2.5)  # rise slope
+                    mag_g[i] = m0_g + (rise_time - t) * rise_slope
                 elif t < rise_time + duration_peak:
                     mag_g[i] = m0_g
                 else:
