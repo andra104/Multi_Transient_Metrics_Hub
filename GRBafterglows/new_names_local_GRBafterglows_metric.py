@@ -135,8 +135,8 @@ class LC:
             return
 
         rng = np.random.default_rng(42)
-        # peak_mag_range = (-31.6, -18.47) 
-        peak_mag_range = (-25.1,-25) #shar
+        peak_mag_range = (-31.6, -18.47) 
+        # peak_mag_range = (-25.1,-25) #shar
 
         for _ in range(num_lightcurves):
             # --- Draw intrinsic Rc properties
