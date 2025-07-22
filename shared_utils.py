@@ -278,29 +278,26 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         peak_abs_mag_g = []
         alpha_fade_g = []
         t_jetbreak_g = []
-        #shar adding stuff here
+        #shar adding stuff here      
 
-        print("reminder that shar is not confident about why it's false here")
-        for sid, record in detect_metric.obs_records.items():
-            # print(sid)
-            filt_arr = np.array(record.get("filter", []))
-            snr_arr = np.array(record.get("snr_obs", []))
+        for i, row in df_obs.iterrows():
+            sid = row['sid']
+            filt_arr = np.array(row["filter"])
+            snr_arr = np.array(row["snr_obs"])
             good = snr_arr >= 5
             n_filters_detected_per_event.append(len(np.unique(filt_arr[good])))
             n_observations_detected.append(np.sum(good))
             peak_abs_mag_g.append(shared_lc_model.data[sid]['g']['mag'][0])
             alpha_fade_g.append(shared_lc_model.data[sid]['g']['mag'][1])
-            t_jetbreak_g.append(shared_lc_model.data[sid]['g']['mag'][2])
-
-            
-            if record.get("detected", False): #for true detections
+            t_jetbreak_g.append(shared_lc_model.data[sid]['g']['mag'][2])            
+            if row['detected']==True:
                 n_filters_detected_per_detected_event.append(len(np.unique(filt_arr[good])))
-                n_detected+=1
-                
-            
+
+        
         mean_filters = np.mean(n_filters_detected_per_detected_event)
         std_filters = np.std(n_filters_detected_per_detected_event)        
-        
+
+        n_detected = np.sum(df_obs['detected'])
     
         print(f"Out of {n_events} simulated events, with {len(obs_records)} events in visible positions, Rubin detected {n_detected} under the {cadence} cadence.")
         print(f"Of those, each event was observed in an average of {mean_filters:.1f} ± {std_filters:.1f} filters.")
