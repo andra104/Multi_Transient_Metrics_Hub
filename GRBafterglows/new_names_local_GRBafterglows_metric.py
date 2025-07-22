@@ -291,8 +291,7 @@ class Base_Metric(BaseMetric):
                 'mjd_obs': dataSlice[self.mjdCol],
                 'mag_obs': mags,
                 'snr_obs': snr,
-                'filter': filters,
-                
+                'filter': filters
                 # NO 'detected' YET -- will be set later if detected!
             }
             
@@ -339,7 +338,6 @@ class Detect_Metric(Base_Metric):
 
 
     def run(self, dataSlice, slice_point=None):
-        print("slice point: ",slice_point['sid'])
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
     
         if obs_record is None:
@@ -393,7 +391,8 @@ class Detect_Metric(Base_Metric):
             'snr_obs': obs_record.get('snr_obs', np.array([])).tolist(),
             'mjd_obs': obs_record.get('mjd_obs', np.array([])).tolist(),
             'theta_obs': slice_point['theta_obs'],
-            'filter': obs_record.get('filter', np.array([])).tolist()
+            'filter': obs_record.get('filter', np.array([])).tolist(),
+            'distance_modulus': 5 * np.log10(slice_point['distance'] * 1e6) - 5
         })    
 
         self.obs_records[slice_point['sid']] = obs_record

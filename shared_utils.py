@@ -275,9 +275,12 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         n_filters_detected_per_event = []
         n_filters_detected_per_detected_event = []
         n_detected = 0 #with our criteria, not just with snr>5
-
+        peak_abs_mag_g = []
+        alpha_fade_g = []
+        t_jetbreak_g = []
         #shar adding stuff here
-        
+
+        print("reminder that shar is not confident about why it's false here")
         for sid, record in detect_metric.obs_records.items():
             # print(sid)
             filt_arr = np.array(record.get("filter", []))
@@ -285,6 +288,11 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
             good = snr_arr >= 5
             n_filters_detected_per_event.append(len(np.unique(filt_arr[good])))
             n_observations_detected.append(np.sum(good))
+            peak_abs_mag_g.append(shared_lc_model.data[sid]['g']['mag'][0])
+            alpha_fade_g.append(shared_lc_model.data[sid]['g']['mag'][1])
+            t_jetbreak_g.append(shared_lc_model.data[sid]['g']['mag'][2])
+
+            
             if record.get("detected", False): #for true detections
                 n_filters_detected_per_detected_event.append(len(np.unique(filt_arr[good])))
                 n_detected+=1
@@ -294,13 +302,16 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         std_filters = np.std(n_filters_detected_per_detected_event)        
         
     
-        print(f"Out of {n_events} simulated events, with {len(obs_records)} events in visible positions (NOT SURE IF TRUE), Rubin detected {n_detected} under the {cadence} cadence.")
+        print(f"Out of {n_events} simulated events, with {len(obs_records)} events in visible positions, Rubin detected {n_detected} under the {cadence} cadence.")
         print(f"Of those, each event was observed in an average of {mean_filters:.1f} ± {std_filters:.1f} filters.")
         
 
         df_obs['n_observations_detected'] = n_observations_detected
         df_obs['n_filters_detected'] = n_filters_detected_per_event
-
+        df_obs['peak_abs_mag_g'] = peak_abs_mag_g
+        df_obs['alpha_fade_g'] = alpha_fade_g
+        df_obs['t_jetbreak_g'] = t_jetbreak_g
+        df_obs['peak_apparent_mag_g_noebv'] = df_obs['peak_abs_mag_g'] + df_obs['distance_modulus']
 
         # Now save
         df_obs.to_csv(os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"), index=False)
