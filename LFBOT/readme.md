@@ -7,7 +7,7 @@ deeper analysis or visualization.
 
 ### Light Curve Modeling
 
-- **Peak absolute magnitude range**: (-21.5, -20) 
+- **Peak absolute magnitude range**: (-22, -19.5) 
 - **Rise power law index α**: (-2.5, -0.25)
 - **Fade power law index α**: (0.15, 0.45) 
 - **Light curve model**:  
