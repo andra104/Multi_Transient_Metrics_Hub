@@ -99,7 +99,7 @@ def uniform_wfd_sky(n_points, mask_map, nside=64, seed=None):
 # Plotting light curves from pkl file
 # --------------------------------------------
 
-def plot_some_lcs_from_pkl(templates_file, num=3):
+def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time = True):
     '''
     templates_file is the path to the pkl with the lc templates
     num is how many we plot, starting at the beginning of the file
@@ -108,20 +108,37 @@ def plot_some_lcs_from_pkl(templates_file, num=3):
     filters = ['u', 'g', 'r', 'i', 'z', 'y']
     colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
 
+    fname = os.path.basename(templates_file).lower()
+    
+    # if "lfbot" in fname:
+    #     use_log_time = False  
+    # elif "grb" in fname:
+    #     use_log_time = True   # Use log time for GRB
+    # else:
+    #     use_log_time = True   # Default to log if unsure
+
+
     for i in range(num):
         for f in filters:
+            time_vals = lcdict["lightcurves"][i][f]['ph']
+            if use_log_time:
+                time_vals = np.log10(time_vals + 1e-5)  # Logarithmic scale
+
             plt.plot(
-                np.log10(lcdict["lightcurves"][i][f]['ph'] + 1e-5),
+                time_vals,
                 lcdict["lightcurves"][i][f]['mag'],
                 color=colors[f],
-                label=f if i == 0 else None  # Add label only once
+                label=f if i == 0 else None
             )
+
         plt.title(f"Light curve template #{i}")
-        plt.xlabel("log time (days)")
+        plt.xlabel("log time (days)" if use_log_time else "time (days)")
         plt.ylabel("absolute mag")
         plt.gca().invert_yaxis()
+        plt.ylim(-15,-20)
         plt.legend()
         plt.show()
+
 
 # --------------------------------------------
 # Helper function to apply either redshift or distance (directly)

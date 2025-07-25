@@ -54,6 +54,7 @@ class LC:
             'z': 0.09743514963840874,
             'y': 0.0347938320584038
         }
+        # Do the mag change as an additive factor using the mag ratios (that were converted from the flux ratios), should be a single line as an arrray
 
         if load_from and os.path.exists(load_from):
             with open(load_from, 'rb') as f:
@@ -65,29 +66,28 @@ class LC:
 
 
         rng = np.random.default_rng(42)
-        self.t_grid = np.linspace(0.01, 7.0, num_samples)  # or use logspace
+        self.t_grid = np.linspace(0.01, 15.0, num_samples)  # or use logspace
 
         for _ in range(num_lightcurves):
             lc = {}
-            # Random g-band light curve parameters
-            m0_g = rng.uniform(-21.5, -20.0)
-            rise_time = rng.uniform(1, 5)  # days to peak
-            fade_rate = rng.uniform(0.15, 0.45)  # mag/day
-            duration_peak = rng.uniform(0, 4)  # flat peak duration in days
+
+            m0_g = rng.uniform(-22, -19.5)  # peak absolute mag
+            t0 = 5     # time of peak (days)
+            alpha_rise = rng.uniform(0.25, 2.5)
+            alpha_fade = rng.uniform(0.15, 0.45)
+            alpha_fade = 2.2
+
+            print(f"m0:_g:{m0_g},t0:{t0},rise:{alpha_rise},fade:{alpha_fade}")
 
             mag_g = np.zeros_like(self.t_grid)
-            rise_slope = rng.uniform(0.25, 2.5)  # ✅ one value per LC
 
             for i, t in enumerate(self.t_grid):
-                if t < rise_time:
-                    mag_g[i] = m0_g + (rise_time - t) * rise_slope
-                elif t < rise_time + duration_peak:
-                    mag_g[i] = m0_g
+                if t < t0:
+                    mag_g[i] = m0_g - 2.5 * alpha_rise * np.log10(t / t0)
                 else:
-                    mag_g[i] = m0_g + (t - (rise_time + duration_peak)) * fade_rate
+                    mag_g[i] = m0_g + 2.5 * alpha_fade * np.log10(t / t0)
 
-            # Convert g-band light curve to other bands using flux ratios
-            flux_g = 10**(-0.4 * mag_g)
+            flux_g = 10 ** (-0.4 * mag_g)
             for f in self.filts:
                 flux_f = flux_g * self.ratios[f]
                 mag_f = -2.5 * np.log10(flux_f)
