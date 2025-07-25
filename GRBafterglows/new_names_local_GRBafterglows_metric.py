@@ -300,9 +300,9 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
     This metric tests whether the transient can be sufficiently characterized for follow-up
     science goals. An event is considered 'characterized' if it meets two criteria:
     
-    (1) At least 4 observations with signal-to-noise ratio (SNR) ≥ 3.
+    (1) At least 4 observations with signal-to-noise ratio (SNR) ≥ 5. 
     (2) Among those detections, the observations span at least 3 different filters 
-        and cover a duration of at least 3 days.
+        and cover a duration of at least 3 days and less than two weeks.
 
     These thresholds are motivated by the need to capture the transient's color evolution 
     and fading behavior across multiple bands and epochs, which are key for identifying
@@ -323,12 +323,12 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         detected = self.parent_instance.detect(filters, snr, times, obs_record)
         if detected:
-            good = snr >= 3
+            good = snr >= 5
             if np.sum(good) < 4:
                 return 0.0
             n_filters = len(np.unique(filters[good]))
-            duration = np.ptp(times[good])
-            if n_filters >= 3 and duration >= 3:
+            duration = np.ptp(times[good]) #duration of at least 3 days and less than two weeks
+            if n_filters >= 3 and duration >= 3 and duration >= 14:
                 return 1.0
         return 0.0
 
@@ -342,9 +342,10 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 
     This metric evaluates whether a GRB afterglow would be suitable for rapid spectroscopic follow-up.
     An event is considered triggerable if:
+    
     (0.5) it is detected
-    (1) At least one filter shows brightness < 21 mag,
-    (2) It rises faster than 0.3 mag/day in that filter,
+    (1) At least one filter shows brightness < 21 mag within the first two days of peak,
+    (2) It rises faster than 0.3 mag/day in that filter, #always true in our model
     (3) Both detections used to assess this have SNR >= 5.
     """
     def __init__(self, **kwargs):
@@ -383,17 +384,23 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 
             t = mjd[good]
             m = mags[good]
+            best_times = t[m<21]
+            
+            if len(best_times) > 0:  
+                peak_time = self.mjd0 + slice_point['peak_time']
+                if np.any (np.abs(best_times - peak_time) < 2):
+                    return 1.0  
+                
+            #assume rise rate is always that fast and detected. 
+            
+            # # Check rise rate
+            # delta_mag = np.diff(m)
+            # delta_time = np.diff(t)
+            # rise_rate = delta_mag / delta_time  # Positive = fading, Negative = rising
 
-            # Check rise rate
-            delta_mag = np.diff(m)
-            delta_time = np.diff(t)
-            rise_rate = delta_mag / delta_time  # Positive = fading, Negative = rising
+            # #if np.any(rise_rate < -0.3) and np.any(m < 21): #we don't have rise rates atm
+            # #if np.any(np.abs(rise_rate) > 0.3) and np.any(m < 21): # triggers if any rapid brightness change (fading or rising) AND magnitude is bright enough
 
-            #if np.any(rise_rate < -0.3) and np.any(m < 21): #we don't have rise rates atm
-            #if np.any(np.abs(rise_rate) > 0.3) and np.any(m < 21): # triggers if any rapid brightness change (fading or rising) AND magnitude is bright enough
-            if np.any(m < 21): #assume rise rate is always that fast and detected.  
-
-                return 1.0
 
         return 0.0
 
