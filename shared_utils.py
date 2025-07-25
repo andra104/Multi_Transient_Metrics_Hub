@@ -16,6 +16,10 @@ import shutil
 from astropy.cosmology import Planck18 as cosmo
 import astropy.units as u
 from astropy.cosmology import z_at_value
+from rubin_sim.maf.slicers import UserPointsSlicer
+from astropy.coordinates import SkyCoord
+from dustmaps.sfd import SFDQuery
+
 
 
 
@@ -178,7 +182,7 @@ def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
 # Run detect metric
 # --------------------------------------------
 
-def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, debug=True, plot=True, clean_temp=False, use_extinction=True):
+def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, df_file, ignore_triples=False, debug=True, plot=True, clean_temp=False, use_extinction=True):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -298,15 +302,15 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         #shar adding stuff here      
 
         for i, row in df_obs.iterrows():
-            sid = row['sid']
+            file_indx = row['file_indx']
             filt_arr = np.array(row["filter"])
             snr_arr = np.array(row["snr_obs"])
             good = snr_arr >= 5
             n_filters_detected_per_event.append(len(np.unique(filt_arr[good])))
             n_observations_detected.append(np.sum(good))
-            peak_abs_mag_g.append(shared_lc_model.data[sid]['g']['mag'][0])
-            alpha_fade_g.append(shared_lc_model.data[sid]['g']['mag'][1])
-            t_jetbreak_g.append(shared_lc_model.data[sid]['g']['mag'][2])            
+            peak_abs_mag_g.append(shared_lc_model.data[file_indx]['g']['mag'][0])
+            alpha_fade_g.append(shared_lc_model.data[file_indx]['g']['mag'][1])
+            t_jetbreak_g.append(shared_lc_model.data[file_indx]['g']['mag'][2])            
             if row['detected']==True:
                 n_filters_detected_per_detected_event.append(len(np.unique(filt_arr[good])))
 
@@ -328,8 +332,8 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
         df_obs['peak_apparent_mag_g_noebv'] = df_obs['peak_abs_mag_g'] + df_obs['distance_modulus']
 
         # Now save
-        df_obs.to_csv(os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"), index=False)
-        print("Obs_Record dataframe saved to ",os.path.join(storage_dir, f"ObsRecords_{cadence}.csv"))        
+        df_obs.to_csv(df_file+f"ObsRecords_{cadence}.csv", index=False)
+        print("Obs_Record dataframe saved to ", df_file+f"ObsRecords_{cadence}.csv")        
         
         if plot == True:
             # Plot: Apparent magnitude vs RA and Dec for one filter (e.g. 'r')
@@ -443,7 +447,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, i
 
 
 
-def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True):
+def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, summary_filename, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -459,7 +463,7 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
 
     returns: a dataframe with results
 
-    saves: nothing (maybe it should though idk)
+    saves: that dataframe
     '''
     first = 1
     n_events = len(slicer.slice_points['distance'])
@@ -491,10 +495,12 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
             if first:
                 df = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 df["run"] = runName
+                df["n_events_full_sky"] =  n_events  
                 first = 0
             else:
                 _ = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
-                _["run"] = runName            
+                _["run"] = runName
+                _["n_events_full_sky"] =  n_events              
                 df = pd.concat([df, _])
         # Healpix plotting
 
@@ -561,11 +567,303 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
                 outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
                 print(f"[CLEANUP] Removing temp directory: {outDir}")
                 shutil.rmtree(outDir, ignore_errors=True)
-    
+    df.to_csv(summary_filename)
+    print("saved summary to ",summary_filename)
     return df
 
-    if clean_temp:
-        for cadence in cadences:
-            outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
-            print(f"[CLEANUP] Removing temp directory: {outDir}")
-            shutil.rmtree(outDir, ignore_errors=True)
+
+
+
+# --------------------------------------------
+# Volumetric rate model (for GRBs, on-axis ≈ 10⁻⁹ Mpc⁻³ yr⁻¹)
+# --------------------------------------------
+def sample_rate_from_volume(rate_density, t_start, t_end, 
+                                d_min=None, d_max=None,
+                                z_min=None, z_max=None): #1e-8 for GRBs to account for dirty fireball and off axis, 1e-9 without
+    """
+    Estimate the number of event from comoving volume and volumetric rate.
+
+    Parameters
+    ----------
+    t_start : float
+        Start of the time window (days).
+    t_end : float
+        End of the time window (days).
+    d_min : float
+        Minimum luminosity distance in Mpc.
+    d_max : float
+        Maximum luminosity distance in Mpc.
+    rate_density : float
+        Volumetric event rate in events/Mpc^3/yr.
+
+    Returns
+    -------
+    int
+        Expected number of events in the survey.
+    """
+
+    d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
+
+    z_min = z_at_value(cosmo.comoving_distance, d_min * u.Mpc)
+    z_max = z_at_value(cosmo.comoving_distance, d_max * u.Mpc)
+
+    years = (t_end - t_start) / 365.25
+    V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
+    return np.random.poisson(rate_density * V * years)
+
+
+# --------------------------------------------
+# Population Loader (used in scripts)
+# --------------------------------------------
+def load_or_generate_population(use_extinction, pop_file, t_start=1, t_end=3652, seed=42,
+                                d_min=None, d_max=None,
+                                z_min=None, z_max=None,
+                                num_lightcurves=1000,
+                                gal_lat_cut=None, rate_density=1e-8,
+                                generate_new=False,
+                                make_debug_plots=False):
+    """
+    Load population from a saved file or generate a new one.
+
+    Parameters
+    ----------
+    t_start : float
+        Start time in days since survey start.
+    t_end : float
+        End time in days since survey start.
+    seed : int
+        RNG seed.
+    d_min, d_max : float
+        Minimum and maximum luminosity distances (Mpc).
+    num_lightcurves : int
+        Number of templates available.
+    gal_lat_cut : float or None
+        Optional minimum Galactic latitude (deg).
+    rate_density : float
+        Volumetric rate in Mpc⁻³ yr⁻¹.
+    pop_file : str
+        Path to save or load population.
+    generate_new : bool
+        If True, regenerate population and overwrite.
+    make_debug_plots : bool
+        If True, show debug histograms.
+
+    Returns
+    -------
+    UserPointsSlicer
+        Slicer with populated slice_points metadata.
+    """
+    if generate_new or not os.path.exists(pop_file):
+        print(f"[INFO] Generating population and saving to {pop_file}")
+        slicer = generate_PopSlicer(use_extinction=use_extinction, 
+                                    t_start=t_start, t_end=t_end,
+                                    d_min=d_min, d_max=d_max,
+                                    z_min = z_min, z_max = z_max,
+                                    seed=seed,
+                                    num_lightcurves=num_lightcurves,
+                                    gal_lat_cut=gal_lat_cut,
+                                    rate_density=rate_density,
+                                    save_to=pop_file,
+                                    make_debug_plots=make_debug_plots)
+    else:
+        print(f"[INFO] Loading population from {pop_file}")
+        slicer = generate_PopSlicer(use_extinction=use_extinction,
+                                    load_from=pop_file)
+
+    return slicer
+
+    
+# --------------------------------------------
+# Population generator
+# --------------------------------------------
+def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
+                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, gal_lat_cut=None, rate_density=None, 
+                         load_from=None, save_to=None, make_debug_plots=True):
+    """
+    Generate a population of GRB afterglows with realistic extinction and sky distribution.
+
+    Parameters
+    ----------
+    use_extinction: whether to use extinction (Bool)
+    gal_lat_cut : float or None
+        Optional Galactic latitude cut (e.g., 15 deg).
+    load_from : str or None
+        If set, load slice_points from this pickle file.
+    save_to : str or None
+        If set, save the slice_points to this pickle file.
+    make_debug_plots : True or anything else
+        if true, will plot various distributions and print some stuff
+    """
+    if load_from and os.path.exists(load_from):
+        with open(load_from, 'rb') as f:
+            slice_data = pickle.load(f)
+        slicer = UserPointsSlicer(ra=slice_data['ra'], dec=slice_data['dec'], badval=0)
+        slicer.slice_points.update(slice_data)
+        print(f"Loaded population from {load_from}")
+        return slicer
+
+    rng = np.random.default_rng(seed)
+    d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
+    n_events = sample_rate_from_volume(t_start=t_start, t_end=t_end, d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max, rate_density=rate_density)
+    print(f"Simulated {n_events} events using rate_density = {rate_density:.1e}")
+
+    
+    #ra, dec = uniform_sphere_degrees(n_events, seed=seed) #returns degrees
+    nside = 64  # Or 128 if you want higher resolution
+    ra, dec = inject_uniform_healpix(nside=nside, n_events=n_events, seed=seed)
+
+    #print(f"[CHECK] Dec range: {dec.min():.2f} to {dec.max():.2f} (expected ~[-90, 90])")
+
+    dec = np.clip(dec, -89.9999, 89.9999)
+    #dec_rad = np.radians(dec)
+    
+    slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
+    #print(f"Print 10 = {ra[:10],dec[:10]}")
+    #print(f" Value = {slicer.slice_points}")
+    #slicer.slice_points['ra'] = ra
+    #slicer.slice_points['dec'] = dec_rad  # Correct assignment
+    if make_debug_plots==True:
+        plt.hist(slicer.slice_points['ra'], bins=50)
+        plt.xlabel("RA [rad]")
+        plt.title("Injected Population – RA Distribution")
+        plt.grid(True)
+        plt.show()
+        
+        plt.hist(slicer.slice_points['dec'], bins=50)
+        plt.xlabel("Dec [rad]")
+        plt.title("Injected Population – Dec Distribution")
+        plt.grid(True)
+        plt.show()
+
+    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
+    distances = rng.uniform(d_min, d_max, n_events)
+    peak_times = rng.uniform(t_start, t_end, n_events)
+    file_indx = rng.integers(0, num_lightcurves, len(ra))
+
+    #print(t_start, t_end, n_events)
+    if make_debug_plots==True:  
+        plt.hist(peak_times,  bins=50)
+        plt.xlabel("peak time")
+        plt.title("Peak Time")
+        plt.grid(True)
+        plt.show()
+    
+        plt.hist(distances,  bins=50)
+        plt.xlabel("distance")
+        plt.title("Distance Distribution")
+        plt.grid(True)
+        plt.show()
+
+
+    
+    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
+    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
+    
+        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
+        # print("[DEBUG 7]: Do you see me")
+
+
+    #coords = SkyCoord(ra=slicer.slice_points['ra'] * u.deg, dec=slicer.slice_points['dec'] * u.deg, frame='icrs') - this code just labels them as deg. u.deg doesn't convert them. 
+
+    coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
+    if make_debug_plots==True:     
+        print(f"[DEBUG] coords.dec[:5]: {coords.dec[:5]}")
+        print(f"[DEBUG] coords.dec.unit: {coords.dec.unit}")
+
+        plt.hist(coords.ra, bins=50)
+        plt.xlabel("RA [deg]")
+        plt.title("SkyCoord RA Distribution")
+        plt.grid(True)
+        plt.show()
+        
+        plt.hist(coords.dec, bins=50)
+        plt.xlabel("Dec [deg]")
+        plt.title("SkyCoord Dec Distribution")
+        plt.grid(True)
+        plt.show()
+
+    sfd = SFDQuery()
+    if use_extinction:
+        ebv_vals = sfd(coords)
+    else:
+        ebv_vals = np.zeros(len(distances))
+
+    if gal_lat_cut is not None:
+        b = coords.galactic.b.deg
+        mask = np.abs(b) > gal_lat_cut
+        ra, dec = ra[mask], dec[mask]
+        distances = distances[mask]
+        peak_times = peak_times[mask]
+        file_indx = file_indx[mask]
+        ebv_vals = ebv_vals[mask]
+        coords = coords[mask]
+
+
+    
+
+    #slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)
+    #slicer.slice_points['ra'] = ra
+    #slicer.slice_points['dec'] = dec
+    slicer.slice_points['distance'] = distances
+    slicer.slice_points['peak_time'] = peak_times
+    slicer.slice_points['file_indx'] = file_indx
+    slicer.slice_points['ebv'] = ebv_vals
+    slicer.slice_points['gall'] = coords.galactic.l.deg
+    slicer.slice_points['galb'] = coords.galactic.b.deg
+    slicer.slice_points['theta_obs'] = theta_obs
+
+    
+
+    if save_to:
+        with open(save_to, 'wb') as f:
+            pickle.dump(dict(slicer.slice_points), f)
+        print(f"Saved population to {save_to}")
+
+    return slicer
+
+# --------------------------------------------
+# Filename builder for saving outputs
+# --------------------------------------------
+
+def build_filenames(rate_density, 
+                        z_min, 
+                        z_max,
+                        d_min, 
+                        d_max,
+                        science_case, #"GRBafterglows" for instance
+                        testname=None,
+                        testname_metric_only=None,
+                        ignore_triples=None,                   
+                        use_extinction=None,
+                        base_dir=None):
+    """
+    Construct filenames for saving templates, filename, output dataframe, storage_dir, summary_filename
+
+    Parameters
+    ----------
+
+
+    Returns
+    -------
+    four strs : path for templates, filename, output dataframe, storage_dir, summary_filename
+    """
+
+    if ignore_triples==True:
+        testname_metric_only = str(testname_metric_only)+"_it_"+str(ignore_triples)
+
+    #shar
+    if base_dir==None:
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
+        
+    label = science_case + f"_den_{rate_density}_d_{d_min}-{d_max}_Mpc_z_{z_min}-{z_max}_Mpc_ext_{use_extinction}_{testname}"
+    print(label)
+
+    storage_dir = os.path.join(base_dir, science_case)
+    templates_file = os.path.join(storage_dir, label+"_templates.pkl")
+    pop_file = os.path.join(storage_dir, label+"_population.pkl")
+    df_file = os.path.join(storage_dir, label+f"_{testname_metric_only}_obs_record")
+    summary_filename = os.path.join(storage_dir, label+f"_{testname_metric_only}_multi_summary.csv")
+    
+    return templates_file, pop_file, df_file, storage_dir, summary_filename
+
+
