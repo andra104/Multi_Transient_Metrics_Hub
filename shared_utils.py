@@ -104,7 +104,7 @@ def uniform_wfd_sky(n_points, mask_map, nside=64, seed=None):
 # Plotting light curves from pkl file
 # --------------------------------------------
 
-def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time = True):
+def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time = True, plot_overlap=False):
     '''
     templates_file is the path to the pkl with the lc templates
     num is how many we plot, starting at the beginning of the file
@@ -133,15 +133,19 @@ def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time = True):
                 time_vals,
                 lcdict["lightcurves"][i][f]['mag'],
                 color=colors[f],
-                label=f if i == 0 else None
+                label=f if i == 0 else None,
+                alpha=0.5
             )
 
         plt.title(f"Light curve template #{i}")
         plt.xlabel("log time (days)" if use_log_time else "time (days)")
         plt.ylabel("absolute mag")
         plt.gca().invert_yaxis()
-        plt.ylim(-15,-20)
+        plt.ylim(-5,-25) #-15,20 was original shar
         plt.legend()
+        if plot_overlap==False:
+            plt.show()
+    if plot_overlap!=False:
         plt.show()
 
 
