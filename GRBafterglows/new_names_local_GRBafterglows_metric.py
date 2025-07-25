@@ -8,10 +8,9 @@ from rubin_sim.phot_utils import DustValues
 import sys
 import os
 sys.path.append(os.path.abspath(".."))
-from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix
+from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, apply_spectral_index, evaluate
 
-from rubin_sim.maf.utils import m52snr
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 from astropy.cosmology import Planck18 as cosmo
 from astropy.coordinates import Galactic, ICRS as ICRSFrame
 from astropy.coordinates import SkyCoord
@@ -30,57 +29,7 @@ from pathlib import Path
 DEBUG = False
 # MAXGAP = 1
 
-# -------------------------------------------
-# Applying correlation between filters 
-# -------------------------------------------
 
-def apply_spectral_index(mag_ref, filtername, ref_filter="Rc", beta=-0.75):
-    """
-    This function adjusts a magnitude from R_c to any Rubin filter assuming a power-law SED where F_ν ∝ ν^β.
-
-    We're working in AB magnitudes, so we don't need to convert to flux first — the zero-points cancel out.
-    The difference between magnitudes in two bands corresponds directly to the spectral slope:
-
-    Δm = 2.5 * β * log10(ν_target / ν_ref)
-
-    This is based on Cenko and other GRB afterglow spectral energy distributions that assume a constant β. We assume the reference
-    band is R_c, and the correction is applied to get estimated peak magnitudes in ugrizy.
-
-    Rc_freq = c / wavelength_Rc = 2.998e17 / 658
-
-    Parameters
-    ----------
-    mag_ref : float or array_like
-        Magnitude in the reference filter (e.g., r-band).
-    filtername : str
-        Target LSST filter (e.g., 'g', 'i').
-    ref_filter : str or None
-        Reference filter used to simulate the light curve. Default is from config.
-    beta : float or None
-        Spectral index. If None, uses value from GRB_CONFIG.
-
-    Returns
-    -------
-    mag_target : float or array_like
-        Adjusted magnitude in the target filter.
-    """
-    FILTER_CENTRAL_FREQS = {
-        'Rc': 2.99792458e17 / 658.0,  # Hz, R_c band
-        'u': 8.088e14,
-        'g': 6.293e14,
-        'r': 4.844e14,
-        'i': 3.979e14,
-        'z': 3.461e14,
-        'y': 3.080e14,
-    }
-
-    if filtername == ref_filter:
-        return mag_ref
-
-    nu_ref = FILTER_CENTRAL_FREQS[ref_filter]
-    nu_target = FILTER_CENTRAL_FREQS[filtername]
-    delta_mag = 2.5 * beta * np.log10(nu_target / nu_ref)
-    return mag_ref + delta_mag
 
 # -------------------------------------------
 # Generate Single Light Curve from Rc Parameters
@@ -168,58 +117,7 @@ class LC:
         )
         
 
-# --------------------------------------------------
-# Light Curve Template Generator (Separate from Population)
-# --------------------------------------------------
-def generate_Templates(
-    num_samples=100, num_lightcurves=1000,
-    save_to="GRBAfterglow_templates.pkl"
-):
-    """
-    Generate synthetic GRB afterglow light curve templates and save to file.
-    """
-    # Create the directory if it doesn't exist
-    Path(save_to).parent.mkdir(parents=True, exist_ok=True)
 
-    lc_model = LC(num_lightcurves=num_lightcurves, load_from=None)
-    with open(save_to, "wb") as f:
-        pickle.dump({'lightcurves': lc_model.data, 't_grid': lc_model.t_grid}, f)
-
-    print(f"Saved synthetic GRB light curve templates to {save_to}")
-
-# --------------------------------------------
-# Light Curve Loader (used in scripts)
-# --------------------------------------------
-def load_or_generate_templates(templates_file="GRBAfterglow_templates.pkl",
-                               num_samples=100, num_lightcurves=1000,
-                               generate_new=False):
-    """
-    Load GRB light curve templates from a file, or generate and save new ones.
-
-    Parameters
-    ----------
-    templates_file : str
-        Path to the .pkl file containing light curves.
-    num_samples : int
-        Number of time samples in each light curve.
-    num_lightcurves : int
-        Number of unique light curve templates to simulate.
-    generate_new : bool
-        Whether to generate and save new templates.
-
-    Returns
-    -------
-    LC instance
-        The loaded or newly generated light curve model.
-    """
-    if generate_new or not os.path.exists(templates_file):
-        print(f"[INFO] Generating {num_lightcurves} light curve templates.")
-        generate_Templates(num_samples=num_samples,
-                           num_lightcurves=num_lightcurves,
-                           save_to=templates_file)
-    else:
-        print(f"[INFO] Loading light curve templates from {templates_file}.")
-    return LC(load_from=templates_file)
 
 
 # --------------------------------------------
@@ -263,44 +161,6 @@ class Base_Metric(BaseMetric):
 
 
 
-    
-    def evaluate_grb(self, dataSlice, slice_point, return_full_obs=True):
-        """
-        Evaluate GRB light curve at the location and time of the slice point.
-        Apply extinction, distance modulus, and optional filter inclusion.
-        """
-        t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
-        mags = np.zeros(t.size)
-    
-        for f in np.unique(dataSlice[self.filterCol]):
-            infilt = np.where(dataSlice[self.filterCol] == f)
-            mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
-
-            if self.use_extinction:
-                mags[infilt] += self.ax1[f] * slice_point['ebv']
-                if not self.extinction_printed:
-                    print("EBV included")
-                    self.extinction_printed = True
-
-            #mags[infilt] += self.ax1[f] * slice_point['ebv']
-            mags[infilt] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
-    
-        snr = m52snr(mags, dataSlice[self.m5Col])
-        filters = dataSlice[self.filterCol]
-        times = t
-    
-        if return_full_obs:
-            obs_record = {
-                'mjd_obs': dataSlice[self.mjdCol],
-                'mag_obs': mags,
-                'snr_obs': snr,
-                'filter': filters
-                # NO 'detected' YET -- will be set later if detected!
-            }
-            
-            return snr, filters, times, obs_record
-        # print("NOT RETURNING OBSRECORD SHAR")
-        return snr, filters, times, None
 
     def detect(self, filters, snr, times, obs_record):
         detected = False        
@@ -364,7 +224,7 @@ class Detect_Metric(Base_Metric):
 
 
     def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
     
         if obs_record is None:
             # print("OBSRECORD IS NONE SHAR")
@@ -460,7 +320,7 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
         self.parent_instance = Base_Metric(use_extinction=use_extinction)
         
     def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         detected = self.parent_instance.detect(filters, snr, times, obs_record)
         if detected:
             good = snr >= 3
@@ -494,7 +354,7 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
         self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
     def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         
         if obs_record is None or len(obs_record['mjd_obs']) < 2:
             return 0.0
