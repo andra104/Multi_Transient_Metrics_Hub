@@ -462,8 +462,6 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
         detected = self.parent_instance.detect(filters, snr, times, obs_record)
-        if not detected:
-            detected = self.parent_instance.betterdetect(filters, snr, times, obs_record)
         if detected:
             good = snr >= 3
             if np.sum(good) < 4:
@@ -484,7 +482,7 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 
     This metric evaluates whether a GRB afterglow would be suitable for rapid spectroscopic follow-up.
     An event is considered triggerable if:
-
+    (0.5) it is detected
     (1) At least one filter shows brightness < 21 mag,
     (2) It rises faster than 0.3 mag/day in that filter,
     (3) Both detections used to assess this have SNR >= 5.
@@ -497,9 +495,12 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = self.evaluate_grb(dataSlice, slice_point, return_full_obs=True)
+        
         if obs_record is None or len(obs_record['mjd_obs']) < 2:
             return 0.0
-
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        if detected!=True:
+            return 0.0
         # Sort by time
         sorted_idx = np.argsort(obs_record['mjd_obs'])
         for key in obs_record:
@@ -545,7 +546,6 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
     """
     all_metrics = {
         'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
-        # 'better_detect': GRBAfterglowBetterDetectMetric(lc_model=lc_model, use_extinction=use_extinction),
         'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
         'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction),
     }
