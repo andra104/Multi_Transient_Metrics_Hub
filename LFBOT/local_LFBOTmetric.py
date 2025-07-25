@@ -8,7 +8,7 @@ from rubin_sim.phot_utils import DustValues
 import sys
 import os
 sys.path.append(os.path.abspath(".."))
-from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, get_distance_bounds
+from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, apply_spectral_index, evaluate
 
 from rubin_sim.maf.utils import m52snr
 import matplotlib.pyplot as plt
@@ -77,7 +77,7 @@ class LC:
             alpha_fade = rng.uniform(0.15, 0.45)
             alpha_fade = 2.2
 
-            print(f"m0:_g:{m0_g},t0:{t0},rise:{alpha_rise},fade:{alpha_fade}")
+            # print(f"m0:_g:{m0_g},t0:{t0},rise:{alpha_rise},fade:{alpha_fade}")
 
             mag_g = np.zeros_like(self.t_grid)
 
@@ -100,58 +100,6 @@ class LC:
                          self.data[lc_indx][filtername]['mag'],
                          left=99, right=99)
 
-
-# --------------------------------------------------
-# Light Curve Template Generator (Separate from Population)
-# --------------------------------------------------
-def generate_Templates(
-    num_samples=100, num_lightcurves=1000,
-    save_to="LFBOT_templates.pkl"
-):
-    """
-    Generate synthetic LFBOT light curve templates and save to file.
-    """
-
-    lc_model = LC(num_lightcurves=num_lightcurves, load_from=None)
-    with open(save_to, "wb") as f:
-        pickle.dump({'lightcurves': lc_model.data, 't_grid': lc_model.t_grid}, f)
-
-    print(f"Saved synthetic LFBOT light curve templates to {save_to}")
-
-    
-# --------------------------------------------
-# Light Curve Loader (used in scripts)
-# --------------------------------------------
-def load_or_generate_templates(templates_file="LFBOT_templates.pkl",
-                               num_samples=100, num_lightcurves=1000,
-                               generate_new=False):
-    """
-    Load light curve templates from a file, or generate and save new ones.
-
-    Parameters
-    ----------
-    templates_file : str
-        Path to the .pkl file containing light curves.
-    num_samples : int
-        Number of time samples in each light curve.
-    num_lightcurves : int
-        Number of unique light curve templates to simulate.
-    generate_new : bool
-        Whether to generate and save new templates.
-
-    Returns
-    -------
-    LC instance
-        The loaded or newly generated light curve model.
-    """
-    if generate_new or not os.path.exists(templates_file):
-        print(f"[INFO] Generating {num_lightcurves} light curve templates.")
-        generate_Templates(num_samples=num_samples,
-                           num_lightcurves=num_lightcurves,
-                           save_to=templates_file)
-    else:
-        print(f"[INFO] Loading light curve templates from {templates_file}.")
-    return LC(load_from=templates_file)
 
 
 # --------------------------------------------
@@ -190,39 +138,6 @@ class Base_Metric(BaseMetric):
         cols = [mjdCol, m5Col, filterCol, nightCol]
         super().__init__(col=cols, metric_name=metricName, units='Detection Efficiency', badval=badval, **kwargs)
 
-    def evaluate_lfbot(self, dataSlice, slice_point, return_full_obs=True):
-        t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
-        mags = np.zeros(t.size)
-        
-        for f in np.unique(dataSlice[self.filterCol]):
-            infilt = np.where(dataSlice[self.filterCol] == f)
-            mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
-
-            if self.use_extinction:
-                mags[infilt] += self.ax1[f] * slice_point['ebv']
-                if not self.extinction_printed:
-                    print("EBV included")
-                    self.extinction_printed = True
-
-            #mags[infilt] += self.ax1[f] * slice_point['ebv']
-            mags[infilt] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
-    
-        snr = m52snr(mags, dataSlice[self.m5Col])
-        filters = dataSlice[self.filterCol]
-        times = t
-    
-        if return_full_obs:
-            obs_record = {
-                'mjd_obs': dataSlice[self.mjdCol],
-                'mag_obs': mags,
-                'snr_obs': snr,
-                'filter': filters
-                # NO 'detected' YET -- will be set later if detected!
-            }
-            
-            return snr, filters, times, obs_record
-        # print("NOT RETURNING OBSRECORD SHAR")
-        return snr, filters, times, None
 
     def detect(self, filters, snr, times, obs_record):
         detected = False
@@ -282,7 +197,7 @@ class Detect_Metric(Base_Metric):
 
 
     def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_lfbot(dataSlice, slice_point, return_full_obs=True)
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
     
         if obs_record is None:
             # print("OBSRECORD IS NONE SHAR")
@@ -383,118 +298,22 @@ class LFBOTCharacterizeMetric(Base_Metric):
         self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
     def run(self, dataSlice, slice_point=None):
-        snr, filters, times, obs_record = self.evaluate_lfbot(dataSlice, slice_point, return_full_obs=True)
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         detected = self.parent_instance.detect(filters, snr, times, obs_record)
 
-        if not detected:
-            detected = self.parent_instance.betterdetect(filters, snr, times, obs_record)
 
         if detected:
             good = snr >= 3
-        if np.sum(good) < 4:
-            return 0.0
-        n_filters = len(np.unique(filters[good]))
-        duration = np.ptp(times[good])
-        if duration >= 3:
-            return 1.0
+            if np.sum(good) < 4:
+                return 0.0
+            n_filters = len(np.unique(filters[good]))
+            duration = np.ptp(times[good])
+            if duration >= 3:
+                return 1.0
         return 0.0
 
-        
 
-# --------------------------------------------
-# LFBOT Population Rate
-# --------------------------------------------
-def sample_lfbot_rate_from_volume(t_start, t_end,
-                                d_min=None, d_max=None,
-                                z_min=None, z_max=None, rate_density=420e-9):
-    """
-    Estimate the number of LFBOT events expected in the survey window.
-
-    Calculates the number of events by multiplying the volumetric LFBOT rate
-    by the comoving volume between the specified distance bounds (d_min, d_max),
-    and the duration of the simulated survey in years.
-
-    Parameters
-    ----------
-    t_start, t_end : float
-        Start and end times of the survey window (in days).
-    d_min, d_max : float
-        Minimum and maximum luminosity distances (in Mpc).
-    rate_density : float
-        Volumetric LFBOT event rate in units of events per Mpc^3 per year.
-
-    Returns
-    -------
-    int
-        Poisson-sampled number of LFBOT events expected over the survey period.
-    """
-    d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
-
-    z_min = z_at_value(cosmo.comoving_distance, d_min * u.Mpc)
-    z_max = z_at_value(cosmo.comoving_distance, d_max * u.Mpc)
-
-    years = (t_end - t_start) / 365.25
-    V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
-    return np.random.poisson(rate_density * V * years)
-
-# --------------------------------------------
-# Population Loader (used in scripts)
-# --------------------------------------------
-def load_or_generate_population(t_start=1, t_end=3652, seed=42,
-                                d_min=None, d_max=None,
-                                z_min=None, z_max=None,
-                                num_lightcurves=1000,
-                                gal_lat_cut=None, rate_density=1e-8,
-                                pop_file="LFBOT_population_fixedpop.pkl",
-                                generate_new=False,
-                                make_debug_plots=False):
-    """
-    Load population from a saved file or generate a new one.
-
-    Parameters
-    ----------
-    t_start : float
-        Start time in days since survey start.
-    t_end : float
-        End time in days since survey start.
-    seed : int
-        RNG seed.
-    d_min, d_max : float
-        Minimum and maximum luminosity distances (Mpc).
-    num_lightcurves : int
-        Number of templates available.
-    gal_lat_cut : float or None
-        Optional minimum Galactic latitude (deg).
-    rate_density : float
-        Volumetric rate in Mpc⁻³ yr⁻¹.
-    pop_file : str
-        Path to save or load population.
-    generate_new : bool
-        If True, regenerate population and overwrite.
-    make_debug_plots : bool
-        If True, show debug histograms.
-
-    Returns
-    -------
-    UserPointsSlicer
-        Slicer with populated slice_points metadata.
-    """
-    if generate_new or not os.path.exists(pop_file):
-        print(f"[INFO] Generating LFBOT population and saving to {pop_file}")
-        slicer = generate_PopSlicer(t_start=t_start, t_end=t_end,
-                                    d_min=d_min, d_max=d_max,
-                                    z_min = z_min, z_max = z_max,
-                                    seed=seed,
-                                    num_lightcurves=num_lightcurves,
-                                    gal_lat_cut=gal_lat_cut,
-                                    rate_density=rate_density,
-                                    save_to=pop_file,
-                                    make_debug_plots=make_debug_plots)
-    else:
-        print(f"[INFO] Loading LFBOT population from {pop_file}")
-        slicer = generate_PopSlicer(load_from=pop_file)
-
-    return slicer
+    
 
 # --------------------------------------------
 # Multi_Metric Standardized Call
@@ -514,184 +333,4 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
         return [all_metrics[name] for name in include if name in all_metrics]
 
 
-# --------------------------------------------
-# population generator
-# --------------------------------------------
-def generate_PopSlicer(t_start=1, t_end=3652, seed=42,
-                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, gal_lat_cut=None, rate_density=1e-8,
-                         load_from=None, save_to=None, make_debug_plots=True):
-    """
-    Generate a population of with realistic extinction and sky distribution.
-
-    Parameters
-    ----------
-    gal_lat_cut : float or None
-        Optional Galactic latitude cut (e.g., 15 deg).
-    load_from : str or None
-        If set, load slice_points from this pickle file.
-    save_to : str or None
-        If set, save the slice_points to this pickle file.
-    make_debug_plots : True or anything else
-        if true, will plot various distributions and print some stuff
-    """
-    if load_from and os.path.exists(load_from):
-        with open(load_from, 'rb') as f:
-            slice_data = pickle.load(f)
-        slicer = UserPointsSlicer(ra=slice_data['ra'], dec=slice_data['dec'], badval=0)
-        slicer.slice_points.update(slice_data)
-        print(f"Loaded LFBOT population from {load_from}")
-        return slicer
-
-    rng = np.random.default_rng(seed)
-    d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
-    n_events = sample_lfbot_rate_from_volume(t_start, t_end, d_min, d_max, z_min, z_max, rate_density=rate_density)
-    print(f"Simulated {n_events} LFBOT events using rate_density = {rate_density:.1e}")
-
-    
-    #ra, dec = uniform_sphere_degrees(n_events, seed=seed) #returns degrees
-    nside = 64  # Or 128 if you want higher resolution
-    ra, dec = inject_uniform_healpix(nside=nside, n_events=n_events, seed=seed)
-
-    #print(f"[CHECK] Dec range: {dec.min():.2f} to {dec.max():.2f} (expected ~[-90, 90])")
-
-    dec = np.clip(dec, -89.9999, 89.9999)
-    #dec_rad = np.radians(dec)
-    
-    slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
-    #print(f"Print 10 = {ra[:10],dec[:10]}")
-    #print(f" Value = {slicer.slice_points}")
-    #slicer.slice_points['ra'] = ra
-    #slicer.slice_points['dec'] = dec_rad  # Correct assignment
-    if make_debug_plots==True:
-        plt.hist(slicer.slice_points['ra'], bins=50)
-        plt.xlabel("RA [rad]")
-        plt.title("Injected LFBOT Population – RA Distribution")
-        plt.grid(True)
-        plt.show()
-        
-        plt.hist(slicer.slice_points['dec'], bins=50)
-        plt.xlabel("Dec [rad]")
-        plt.title("Injected LFBOT Population – Dec Distribution")
-        plt.grid(True)
-        plt.show()
-
-    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
-    distances = rng.uniform(d_min, d_max, n_events)
-    peak_times = rng.uniform(t_start, t_end, n_events)
-    file_indx = rng.integers(0, num_lightcurves, len(ra))
-
-    #print(t_start, t_end, n_events)
-    if make_debug_plots==True:  
-        plt.hist(peak_times,  bins=50)
-        plt.xlabel("peak time")
-        plt.title("Peak Time")
-        plt.grid(True)
-        plt.show()
-    
-        plt.hist(distances,  bins=50)
-        plt.xlabel("distance")
-        plt.title("Distance Distribution")
-        plt.grid(True)
-        plt.show()
-
-
-    
-    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
-    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
-    
-        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
-        print("[DEBUG 7]: Do you see me")
-
-
-    #coords = SkyCoord(ra=slicer.slice_points['ra'] * u.deg, dec=slicer.slice_points['dec'] * u.deg, frame='icrs') - this code just labels them as deg. u.deg doesn't convert them. 
-
-    coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
-    if make_debug_plots==True:     
-        print(f"[DEBUG] coords.dec[:5]: {coords.dec[:5]}")
-        print(f"[DEBUG] coords.dec.unit: {coords.dec.unit}")
-
-        plt.hist(coords.ra, bins=50)
-        plt.xlabel("RA [deg]")
-        plt.title("SkyCoord RA Distribution")
-        plt.grid(True)
-        plt.show()
-        
-        plt.hist(coords.dec, bins=50)
-        plt.xlabel("Dec [deg]")
-        plt.title("SkyCoord Dec Distribution")
-        plt.grid(True)
-        plt.show()
-
-    sfd = SFDQuery()
-    ebv_vals = sfd(coords)
-
-    if gal_lat_cut is not None:
-        b = coords.galactic.b.deg
-        mask = np.abs(b) > gal_lat_cut
-        ra, dec = ra[mask], dec[mask]
-        distances = distances[mask]
-        peak_times = peak_times[mask]
-        file_indx = file_indx[mask]
-        ebv_vals = ebv_vals[mask]
-        coords = coords[mask]
-
-
-    
-
-    #slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)
-    #slicer.slice_points['ra'] = ra
-    #slicer.slice_points['dec'] = dec
-    slicer.slice_points['distance'] = distances
-    slicer.slice_points['peak_time'] = peak_times
-    slicer.slice_points['file_indx'] = file_indx
-    slicer.slice_points['ebv'] = ebv_vals
-    slicer.slice_points['gall'] = coords.galactic.l.deg
-    slicer.slice_points['galb'] = coords.galactic.b.deg
-    slicer.slice_points['theta_obs'] = theta_obs
-
-    
-
-    if save_to:
-        with open(save_to, 'wb') as f:
-            pickle.dump(dict(slicer.slice_points), f)
-        print(f"Saved LFBOT population to {save_to}")
-
-    return slicer
-
-# --------------------------------------------
-# Standardized storage paths (used in scripts)
-# --------------------------------------------
-def get_output_paths(case_label="LFBOTs"):
-    """
-    Generate standardized output filenames and directory paths for this science case.
-
-    Parameters
-    ----------
-    case_label : str
-        Short name for this science case (used to define subfolder).
-        Examples: 'GRBafterglows', 'KNe', 'LFBOTs', etc.
-
-    Returns
-    -------
-    dict
-        Dictionary with standardized paths:
-            - 'case_label'
-            - 'storage_dir'
-            - 'templates_file'
-            - 'pop_file'
-    """
-    # Force base_dir to be .../Multi_Transient_Metrics_Hub/output
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
-
-    storage_dir = os.path.join(base_dir, case_label)
-    templates_file = os.path.join(storage_dir, f"{case_label}_templates.pkl")
-    pop_file = os.path.join(storage_dir, f"{case_label}_population.pkl")
-
-    os.makedirs(storage_dir, exist_ok=True)
-    return {
-        'case_label': case_label,
-        'storage_dir': storage_dir,
-        'templates_file': templates_file,
-        'pop_file': pop_file
-    }
 
