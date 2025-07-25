@@ -430,7 +430,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
 
 
 
-def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True):
+def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, summary_filename, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -446,7 +446,7 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
 
     returns: a dataframe with results
 
-    saves: nothing (maybe it should though idk)
+    saves: that dataframe
     '''
     first = 1
     n_events = len(slicer.slice_points['distance'])
@@ -478,10 +478,12 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
             if first:
                 df = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 df["run"] = runName
+                df["n_events_full_sky"] =  n_events  
                 first = 0
             else:
                 _ = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
-                _["run"] = runName            
+                _["run"] = runName
+                _["n_events_full_sky"] =  n_events              
                 df = pd.concat([df, _])
         # Healpix plotting
 
@@ -548,14 +550,11 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
                 outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
                 print(f"[CLEANUP] Removing temp directory: {outDir}")
                 shutil.rmtree(outDir, ignore_errors=True)
-    
+    df.to_csv(summary_filename)
+    print("saved summary to ",summary_filename)
     return df
 
-    if clean_temp:
-        for cadence in cadences:
-            outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
-            print(f"[CLEANUP] Removing temp directory: {outDir}")
-            shutil.rmtree(outDir, ignore_errors=True)
+
 
 
 # --------------------------------------------
@@ -821,7 +820,7 @@ def build_filenames(rate_density,
                         use_extinction=None,
                         base_dir=None):
     """
-    Construct filenames for saving templates, filename, output dataframe, storage_dir
+    Construct filenames for saving templates, filename, output dataframe, storage_dir, summary_filename
 
     Parameters
     ----------
@@ -829,7 +828,7 @@ def build_filenames(rate_density,
 
     Returns
     -------
-    four strs : path for templates, filename, output dataframe, storage_dir
+    four strs : path for templates, filename, output dataframe, storage_dir, summary_filename
     """
 
     if ignore_triples==True:
@@ -846,7 +845,8 @@ def build_filenames(rate_density,
     templates_file = os.path.join(storage_dir, label+"_templates.pkl")
     pop_file = os.path.join(storage_dir, label+"_population.pkl")
     df_file = os.path.join(storage_dir, label+f"_{testname_metric_only}_obs_record")
-
-    return templates_file, pop_file, df_file, storage_dir
+    summary_filename = os.path.join(storage_dir, label+f"_{testname_metric_only}_multi_summary.csv")
+    
+    return templates_file, pop_file, df_file, storage_dir, summary_filename
 
 
