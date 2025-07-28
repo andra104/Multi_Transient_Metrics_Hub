@@ -239,9 +239,6 @@ class Detect_Metric(Base_Metric):
             'distance_modulus': 5 * np.log10(slice_point['distance'] * 1e6) - 5
         })    
 
-        print(f"DEBUG: type(slice_point['peak_time']) = {type(slice_point['peak_time'])}")
-        print(f"DEBUG: shape(slice_point['peak_time'] = {(slice_point['peak_time'].shape)}")
-
         self.obs_records[slice_point['sid']] = obs_record
         self.latest_obs_record = obs_record if detected else None
     

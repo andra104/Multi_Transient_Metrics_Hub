@@ -727,6 +727,40 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
     dec = np.clip(dec, -89.9999, 89.9999)
     #dec_rad = np.radians(dec)
     
+
+
+    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
+    distances = rng.uniform(d_min, d_max, n_events)
+    peak_times = rng.uniform(t_start, t_end, n_events)
+    file_indx = rng.integers(0, num_lightcurves, len(ra))
+    
+    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
+    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
+    
+        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
+        # print("[DEBUG 7]: Do you see me")
+
+    coords = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
+
+
+    #coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
+
+    sfd = SFDQuery()
+    if use_extinction:
+        ebv_vals = sfd(coords)
+    else:
+        ebv_vals = np.zeros(len(distances))
+
+    if gal_lat_cut is not None:
+        b = coords.galactic.b.deg
+        mask = np.abs(b) > gal_lat_cut
+        ra, dec = ra[mask], dec[mask]
+        distances = distances[mask]
+        peak_times = peak_times[mask]
+        file_indx = file_indx[mask]
+        ebv_vals = ebv_vals[mask]
+        coords = coords[mask]
+
     slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
     #print(f"Print 10 = {ra[:10],dec[:10]}")
     #print(f" Value = {slicer.slice_points}")
@@ -745,12 +779,8 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
-    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
-    distances = rng.uniform(d_min, d_max, n_events)
-    peak_times = rng.uniform(t_start, t_end, n_events)
-    file_indx = rng.integers(0, num_lightcurves, len(ra))
 
-    #print(t_start, t_end, n_events)
+        #print(t_start, t_end, n_events)
     if make_debug_plots==True:  
         plt.hist(peak_times,  bins=50)
         plt.xlabel("peak time")
@@ -763,19 +793,7 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.title("Distance Distribution")
         plt.grid(True)
         plt.show()
-
-
-    
-    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
-    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
-    
-        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
-        # print("[DEBUG 7]: Do you see me")
-
-
-    #coords = SkyCoord(ra=slicer.slice_points['ra'] * u.deg, dec=slicer.slice_points['dec'] * u.deg, frame='icrs') - this code just labels them as deg. u.deg doesn't convert them. 
-
-    coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
+        
     if make_debug_plots==True:     
         print(f"[DEBUG] coords.dec[:5]: {coords.dec[:5]}")
         print(f"[DEBUG] coords.dec.unit: {coords.dec.unit}")
@@ -792,24 +810,6 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
-    sfd = SFDQuery()
-    if use_extinction:
-        ebv_vals = sfd(coords)
-    else:
-        ebv_vals = np.zeros(len(distances))
-
-    if gal_lat_cut is not None:
-        b = coords.galactic.b.deg
-        mask = np.abs(b) > gal_lat_cut
-        ra, dec = ra[mask], dec[mask]
-        distances = distances[mask]
-        peak_times = peak_times[mask]
-        file_indx = file_indx[mask]
-        ebv_vals = ebv_vals[mask]
-        coords = coords[mask]
-
-
-    
 
     #slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)
     #slicer.slice_points['ra'] = ra
@@ -994,9 +994,8 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     Evaluate light curve at the location and time of the slice point.
     Apply extinction and distance modulus.
     """
-    
-    print(f"DEBUG: type(slice_point['peak_time']) = {type(slice_point['peak_time'])}")
-    print(f"DEBUG: shape(slice_point['peak_time'] = {(slice_point['peak_time'].shape)}")
+    if not np.isscalar(slice_point['peak_time']):
+        raise ValueError(f"Non-scalar peak_time: shape={np.shape(slice_point['peak_time'])}")
 
     t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
     mags = np.zeros(t.size)
