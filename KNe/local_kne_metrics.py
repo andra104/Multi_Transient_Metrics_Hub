@@ -385,13 +385,13 @@ class KNeCharacterizeColorEvolveMetric(Base_Metric):
             for j in range(i + 1, len(mjds)):
                 if abs(mjds[i] - mjds[j]) <= self.max_pair_dt and filters[i] != filters[j]:
                     filt_pair = tuple(sorted([filters[i], filters[j]]))
-                    pairs.append((mjds[i], filt_pair))
+                    pairs.append((mjds[i], mjds[j], filt_pair))
 
-                    print(filt_pair)
-                    print(mags[i])
-                    print(mags[j])
-                    print(mjds[i])
-                    print(mjds[j])
+                    #print(filt_pair)
+                    #print(mags[i])
+                    #print(mags[j])
+                    #print(mjds[i])
+                    #print(mjds[j])
             
                         
 
@@ -401,13 +401,13 @@ class KNeCharacterizeColorEvolveMetric(Base_Metric):
         # Look for valid evolution pair (≥3 days apart, same or overlapping filters)
         for i in range(len(pairs)):
             for j in range(i + 1, len(pairs)):
-                t1, f1 = pairs[i]
-                t2, f2 = pairs[j]
+                t1, tone, f1 = pairs[i]
+                t2, tsecond, f2 = pairs[j]
                 if abs(t2 - t1) >= self.min_sep_days:
-                    print(pairs[i])
-                    print(pairs[j])
                     overlap = set(f1).intersection(set(f2))
                     if len(overlap) >= 1:
+                        print(pairs[i])
+                        print(pairs[j], "\n")
                         return 1.0
 
         return 0.0
