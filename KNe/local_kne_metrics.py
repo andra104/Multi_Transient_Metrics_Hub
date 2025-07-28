@@ -28,7 +28,7 @@ import os
 import pickle 
 
 __all__ = [
-    'KN_lc', 'KNePopMetric', 'generateKNPopSlicer',
+    'LC', 'KNePopMetric', 'generateKNPopSlicer',
     'KNeDetectMetric', 'KNeZTFRestSimpleMetric', 'KNeZTFRestSimpleRedMetric',
     'KNeZTFRestSimpleBlueMetric', 'KNeMultiColorDetectMetric',
     'KNeRedColorDetectMetric', 'KNeBlueColorDetectMetric'
@@ -98,7 +98,7 @@ def get_filename(inj_params_list):
     return matched_files
 
 
-class KN_lc:
+class LC:
     def __init__(self, num_samples=None, num_lightcurves=None,
                  file_list=None, load_from=None):
         """
@@ -117,8 +117,8 @@ class KN_lc:
         """
         if load_from is not None and os.path.exists(load_from):
             with open(load_from, 'rb') as f:
-                data = pickle.load(f)
-            self.data = data['lightcurves']
+                obj = pickle.load(f)
+            self.data = obj['lightcurves']
             self.filts = list(self.data[0].keys())
             print(f"Loaded KN light curve templates from {load_from}")
             return
@@ -191,7 +191,7 @@ def generateKNeTemplates(file_list=None, save_to="kne_templates_used.pkl"):
         print(f"Found existing KN light curve templates at {save_to}. Not regenerating.")
         return
 
-    lc_model = KN_lc(file_list=file_list)
+    lc_model = LC(file_list=file_list)
     with open(save_to, "wb") as f:
         pickle.dump({'lightcurves': lc_model.data}, f)
     print(f"Saved KN light curve templates to {save_to}")
@@ -219,7 +219,7 @@ class BaseKNeMetric(BaseMetric):
         if lc_model is not None:
             self.lc_model = lc_model
         else:
-            self.lc_model = KN_lc(load_from=load_from)
+            self.lc_model = LC(load_from=load_from)
 
         self.ax1 = DustValues().ax1
         self.mjdCol = mjdCol

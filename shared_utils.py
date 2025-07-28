@@ -823,11 +823,14 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
     slicer.slice_points['theta_obs'] = theta_obs
 
     
-
     if save_to:
         with open(save_to, 'wb') as f:
             pickle.dump(dict(slicer.slice_points), f)
         print(f"Saved population to {save_to}")
+
+    print(f"DEBUG: type(peak_times) = {type(peak_times)}")
+    print(f"DEBUG: shape(peak_times) = {peak_times.shape}")
+
 
     return slicer
 
@@ -991,6 +994,10 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     Evaluate light curve at the location and time of the slice point.
     Apply extinction and distance modulus.
     """
+    
+    print(f"DEBUG: type(slice_point['peak_time']) = {type(slice_point['peak_time'])}")
+    print(f"DEBUG: shape(slice_point['peak_time'] = {(slice_point['peak_time'].shape)}")
+
     t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
     mags = np.zeros(t.size)
 
