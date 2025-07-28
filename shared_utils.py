@@ -219,46 +219,41 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             for i in range(n_events):
                 out.write(f"{i},{n_filters_detected_per_event[i]}\n")
     '''
+    print(f'changes made 1')
     n_events = len(slicer.slice_points['distance'])
-    note = "scheduler_note not like 'long%'" #if we want to avoid triples
-    
+    note = "scheduler_note not like 'long%'"
+    is_grb = hasattr(metric, '__name__') and 'GRBafterglow' in metric.__name__
+
     for cadence in cadences:
-        runName = cadence
+        print(f"\n--- Running {cadence} ---")
         opsdb = os.path.join(db_dir, f"{cadence}.db")
         outDir = os.path.join(storage_dir, f"Metric_temp_{cadence}")
         os.makedirs(outDir, exist_ok=True)
         resultsDb = db.ResultsDb(out_dir=outDir)
-        
-    
-        print(f"\n--- Running {cadence} ---")
 
-        #### per filter metric here
+
         per_filter_metrics = OrderedDict()
         filters = ['all']
         for filt in filters:
-            detect = metric.Detect_Metric(metricName=f"Detect_{filt}", #filter_include=[filt], 
-                                             lc_model=shared_lc_model, use_extinction=use_extinction)
-                        #GRBAfterglowSpecTriggerableMetric(metricName=f"GRB_Detect_{filt}", filter_include=[filt], 
-                        #                      lc_model=shared_lc_model)
-            if ignore_triples == True:
-                per_filter_metrics[f"Detect_{filt}"] = metric_bundles.MetricBundle(detect, slicer, '' + note)
+            detect = metric.Detect_Metric(metricName=f"Detect_{filt}",
+                                          lc_model=shared_lc_model,
+                                          use_extinction=use_extinction)
+            if ignore_triples:
+                per_filter_metrics[f"Detect_{filt}"] = metric_bundles.MetricBundle(
+                    detect, slicer, note)
             else:
-                per_filter_metrics[f"Detect_{filt}"] = metric_bundles.MetricBundle(detect, slicer, '')
+                per_filter_metrics[f"Detect_{filt}"] = metric_bundles.MetricBundle(
+                    detect, slicer, '')
 
-        pf_group = metric_bundles.MetricBundleGroup(per_filter_metrics, opsdb, out_dir=outDir, results_db=resultsDb)
+        pf_group = metric_bundles.MetricBundleGroup(per_filter_metrics, opsdb,
+                                                    out_dir=outDir, results_db=resultsDb)
         pf_group.run_all()
 
-                # save obs_data
         bundle = per_filter_metrics["Detect_all"]
-        
-        # Pull the actual metric instance used inside the bundle
         detect_metric = bundle.metric
-
-        #get results
         obs_records = list(detect_metric.obs_records.values())
-    
-        #Error checking 1
-        if debug==True:
+
+        if debug:
             print("\nInspecting one obs_record before saving to CSV:")
             sample_record = obs_records[0]
             for key, val in sample_record.items():
@@ -267,116 +262,88 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
                     print(f" | length: {len(val)}")
                 except TypeError:
                     print(f" | value: {val}")
-        # Now get the results
-    
+
         df_obs = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
-        
-        # =======================================================================
-        # Add calendar year assuming MJD0 = 59853.5 (LSST start)
-        # Convert peak MJD to years since LSST start (365.25 days/year)
+        max_index = len(shared_lc_model.data) - 1
+        df_obs = df_obs[df_obs['file_indx'] <= max_index]
         df_obs["year"] = (df_obs["peak_time"] / 365.25).astype(int) + 1
         df_detected_per_year = df_obs[df_obs['detected'] == True].groupby("year").size().reset_index(name="n_detected")
-        # =======================================================================
-    
-    
-        # Convert problematic ndarray columns to lists before saving
+
         for col in ['filter', 'mjd_obs', 'mag_obs', 'snr_obs']:
             df_obs[col] = df_obs[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
-        
-
-
-            
-        #Getting the number of filters detected per event
-        # n_filters_detected_per_event = np.zeros(n_events, dtype=int)
-        
-        # for sid, record in detect_metric.obs_records.items():
-        #     if record.get("detected", False):
-        #         # Count unique filters used in observations above SNR threshold
-        #         filt_arr = np.array(record.get("filter", []))
-        #         snr_arr = np.array(record.get("snr_obs", []))
-        #         good = snr_arr >= 5
-        #         n_filters_detected_per_event[int(sid)] = len(np.unique(filt_arr[good]))
-        
-        # detected_mask = n_filters_detected_per_event >= 1
-        # n_detected = np.sum(detected_mask)
-        # mean_filters = np.mean(n_filters_detected_per_event[detected_mask])
-        # std_filters = np.std(n_filters_detected_per_event[detected_mask])
 
         n_observations_detected = []
         n_filters_detected_per_event = []
         n_filters_detected_per_detected_event = []
-        n_detected = 0 #with our criteria, not just with snr>5
+        n_detected = 0
         peak_abs_mag_g = []
         alpha_fade_g = []
         t_jetbreak_g = []
-        #shar adding stuff here      
 
         for i, row in df_obs.iterrows():
-            file_indx = row['file_indx']
+            file_indx = min(row['file_indx'], len(shared_lc_model.data) - 1)
             filt_arr = np.array(row["filter"])
             snr_arr = np.array(row["snr_obs"])
             good = snr_arr >= 5
             n_filters_detected_per_event.append(len(np.unique(filt_arr[good])))
             n_observations_detected.append(np.sum(good))
-            peak_abs_mag_g.append(shared_lc_model.data[file_indx]['g']['mag'][0])
-            alpha_fade_g.append(shared_lc_model.data[file_indx]['g']['mag'][1])
-            t_jetbreak_g.append(shared_lc_model.data[file_indx]['g']['mag'][2])            
-            if row['detected']==True:
+
+            if is_grb:
+                peak_abs_mag_g.append(shared_lc_model.data[file_indx]['g']['mag'][0])
+                alpha_fade_g.append(shared_lc_model.data[file_indx]['g']['mag'][1])
+                t_jetbreak_g.append(shared_lc_model.data[file_indx]['g']['mag'][2])
+
+            if row['detected']:
                 n_filters_detected_per_detected_event.append(len(np.unique(filt_arr[good])))
 
-        
         mean_filters = np.mean(n_filters_detected_per_detected_event)
-        std_filters = np.std(n_filters_detected_per_detected_event)        
-
+        std_filters = np.std(n_filters_detected_per_detected_event)
         n_detected = np.sum(df_obs['detected'])
-    
-        print(f"Out of {n_events} simulated events, with {len(obs_records)} events in visible positions, Rubin detected {n_detected} under the {cadence} cadence.")
+
+        print(f"Out of {n_events} simulated events, with {len(obs_records)} in visible positions, Rubin detected {n_detected} under the {cadence} cadence.")
         print(f"Of those, each event was observed in an average of {mean_filters:.1f} ± {std_filters:.1f} filters.")
-        
 
         df_obs['n_observations_detected'] = n_observations_detected
         df_obs['n_filters_detected'] = n_filters_detected_per_event
-        df_obs['peak_abs_mag_g'] = peak_abs_mag_g
-        df_obs['alpha_fade_g'] = alpha_fade_g
-        df_obs['t_jetbreak_g'] = t_jetbreak_g
-        df_obs['peak_apparent_mag_g_noebv'] = df_obs['peak_abs_mag_g'] + df_obs['distance_modulus']
 
-        # Now save
+        if is_grb:
+            df_obs['peak_abs_mag_g'] = peak_abs_mag_g
+            df_obs['alpha_fade_g'] = alpha_fade_g
+            df_obs['t_jetbreak_g'] = t_jetbreak_g
+            df_obs['peak_apparent_mag_g_noebv'] = df_obs['peak_abs_mag_g'] + df_obs['distance_modulus']
+
         df_obs.to_csv(df_file+f"ObsRecords_{cadence}.csv", index=False)
-        print("Obs_Record dataframe saved to ", df_file+f"ObsRecords_{cadence}.csv")        
-        
-        if plot == True:
-            # Plot: Apparent magnitude vs RA and Dec for one filter (e.g. 'r')
+        print("Obs_Record dataframe saved to", df_file+f"ObsRecords_{cadence}.csv")
+
+        if plot:
             filtername = 'r'
             ax1 = DustValues().ax1
-             
             ras, decs, peak_mags, detected_flags = [], [], [], []
-         
+
             for i in range(n_events):
                 ra = slicer.slice_points['ra'][i]
-                dec = slicer.slice_points['dec'][i]  # this is in radians already
+                dec = slicer.slice_points['dec'][i]
                 d = slicer.slice_points['distance'][i]
                 ebv = slicer.slice_points['ebv'][i]
-                file_indx = slicer.slice_points['file_indx'][i]
-                
-                m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag']) #detected events are plotted at their true peak magnitude go to m_app
+                file_indx = min(slicer.slice_points['file_indx'][i], len(shared_lc_model.data) - 1)
+                try:
+                    m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag'])
+                except:
+                    m_peak = 99.0
                 A = ax1[filtername] * ebv
                 dm = 5 * np.log10(d * 1e6) - 5
-                m_app = m_peak + dm + A #m_app already uses the minimum (brightest) value of the light curve
-             
+                m_app = m_peak + dm + A
+
                 ras.append(ra)
                 decs.append(dec)
                 peak_mags.append(m_app)
-             
                 detected = any(
                     per_filter_metrics[f"Detect_{f}"].metric_values[i] == 1
                     and not per_filter_metrics[f"Detect_{f}"].metric_values.mask[i]
                     for f in filters
                 )
                 detected_flags.append(detected)
-        
-            # Plot: Apparent magnitude vs RA
-        
+
             plt.figure(figsize=(8, 4))
             plt.scatter(ras, peak_mags, c='black', s=10, label='Injected', alpha=0.6)
             plt.scatter(np.array(ras)[detected_flags], np.array(peak_mags)[detected_flags],
@@ -389,8 +356,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             plt.legend()
             plt.tight_layout()
             plt.show()
-            
-            # Plot: Apparent magnitude vs Dec
+
             plt.figure(figsize=(8, 4))
             plt.scatter(decs, peak_mags, c='black', s=10, label='Injected', alpha=0.6)
             plt.scatter(np.array(decs)[detected_flags], np.array(peak_mags)[detected_flags],
@@ -403,31 +369,23 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             plt.legend()
             plt.tight_layout()
             plt.show()
-        
-    
-        # save summaries
-        outfile = os.path.join(storage_dir, f"local_efficiency_{cadence}.csv")
-        with open(outfile, "w") as out:
-            out.write("sid,n_filters_detected\n")
-            for i in range(len(df_obs)):
-                out.write(f"{i},{n_filters_detected_per_event[i]}\n")
-        
-        if plot == True:
+
             plt.figure(figsize=(8, 4))
             plt.hist(df_obs["year"], bins=np.arange(0.5, 11.5, 1), edgecolor='black')
             plt.xticks(ticks=np.arange(1, 11), labels=[f"Year {i}" for i in range(1, 11)])
             plt.xlabel("Survey Year")
-            plt.ylabel("Number of Events") 
+            plt.ylabel("Number of Events")
             plt.title("Distribution of Peak Times")
             plt.grid(True)
             plt.tight_layout()
             plt.show()
 
             plt.figure(figsize=(8, 4))
-            plt.bar(df_detected_per_year["year"], df_detected_per_year["n_detected"], width=0.7, align='center', edgecolor='black')
+            plt.bar(df_detected_per_year["year"], df_detected_per_year["n_detected"],
+                    width=0.7, align='center', edgecolor='black')
             plt.xticks(ticks=np.arange(1, 11), labels=[f"Year {i}" for i in range(1, 11)])
             plt.xlabel("Survey Year")
-            plt.ylabel("Number of Detections") 
+            plt.ylabel("Number of Detections")
             plt.title("Distribution of DETECTED Peak Times")
             plt.grid(True)
             plt.tight_layout()
@@ -443,13 +401,19 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             plt.grid(True)
             plt.tight_layout()
             plt.show()
-    
-    return df_obs #,df_detected_per_year 
 
-    
-    if clean_temp:
-        print(f"[CLEANUP] Removing temp directory: {outDir}")
-        shutil.rmtree(outDir, ignore_errors=True)
+        outfile = os.path.join(storage_dir, f"local_efficiency_{cadence}.csv")
+        with open(outfile, "w") as out:
+            out.write("sid,n_filters_detected\n")
+            for i in range(len(df_obs)):
+                out.write(f"{i},{n_filters_detected_per_event[i]}\n")
+
+        if clean_temp:
+            print(f"[CLEANUP] Removing temp directory: {outDir}")
+            shutil.rmtree(outDir, ignore_errors=True)
+
+    return df_obs
+
 
 # --------------------------------------------
 # Run several metrics
@@ -485,13 +449,15 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
         os.makedirs(outDir, exist_ok=True)
         resultsDb = db.ResultsDb(out_dir=outDir)
         
-    
+        print("Changes made")
         print(f"\n--- Running {cadence} ---")
-
+        print(np.shape(multi_metrics))
+        print(multi_metrics)
 
 
 
         for one_metric in multi_metrics:
+            print("We are in one_metric")
             mb_key = f"{runName}_{one_metric.__class__.__name__}"
             if ignore_triples == True:
                 bundle = metric_bundles.MetricBundle(one_metric, slicer, '' + note, file_root=mb_key, plot_funcs=[], summary_metrics=[metrics.SumMetric()])
@@ -501,13 +467,17 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
             bd = maf.metricBundles.make_bundles_dict_from_list([bundle])
             bgroup = metric_bundles.MetricBundleGroup({mb_key: bundle}, opsdb, out_dir=outDir, results_db=resultsDb)
             bgroup.run_all()
+            print("We just ran all")
 
             if first:
+                print("We out here")
                 df = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 df["run"] = runName
                 df["n_events_full_sky"] =  n_events  
                 first = 0
+                print(df)
             else:
+                print("Now in else")
                 _ = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 _["run"] = runName
                 _["n_events_full_sky"] =  n_events              
@@ -526,7 +496,7 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
                     dec = slicer.slice_points['dec'][i]  # this is in radians already
                     d = slicer.slice_points['distance'][i]
                     ebv = slicer.slice_points['ebv'][i]
-                    file_indx = slicer.slice_points['file_indx'][i]
+                    file_indx = min(slicer.slice_points['file_indx'][i], len(shared_lc_model.data) - 1)
                     
                     m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag'])
                     A = ax1[filtername] * ebv
@@ -727,40 +697,6 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
     dec = np.clip(dec, -89.9999, 89.9999)
     #dec_rad = np.radians(dec)
     
-
-
-    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
-    distances = rng.uniform(d_min, d_max, n_events)
-    peak_times = rng.uniform(t_start, t_end, n_events)
-    file_indx = rng.integers(0, num_lightcurves, len(ra))
-    
-    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
-    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
-    
-        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
-        # print("[DEBUG 7]: Do you see me")
-
-    coords = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
-
-
-    #coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
-
-    sfd = SFDQuery()
-    if use_extinction:
-        ebv_vals = sfd(coords)
-    else:
-        ebv_vals = np.zeros(len(distances))
-
-    if gal_lat_cut is not None:
-        b = coords.galactic.b.deg
-        mask = np.abs(b) > gal_lat_cut
-        ra, dec = ra[mask], dec[mask]
-        distances = distances[mask]
-        peak_times = peak_times[mask]
-        file_indx = file_indx[mask]
-        ebv_vals = ebv_vals[mask]
-        coords = coords[mask]
-
     slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
     #print(f"Print 10 = {ra[:10],dec[:10]}")
     #print(f" Value = {slicer.slice_points}")
@@ -779,8 +715,13 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
+    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
+    distances = rng.uniform(d_min, d_max, n_events)
+    peak_times = rng.uniform(t_start, t_end, n_events)
+    file_indx = rng.integers(0, num_lightcurves, len(ra))
+    
 
-        #print(t_start, t_end, n_events)
+    #print(t_start, t_end, n_events)
     if make_debug_plots==True:  
         plt.hist(peak_times,  bins=50)
         plt.xlabel("peak time")
@@ -793,7 +734,19 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.title("Distance Distribution")
         plt.grid(True)
         plt.show()
-        
+
+
+    
+    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
+    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
+    
+        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
+        # print("[DEBUG 7]: Do you see me")
+
+
+    #coords = SkyCoord(ra=slicer.slice_points['ra'] * u.deg, dec=slicer.slice_points['dec'] * u.deg, frame='icrs') - this code just labels them as deg. u.deg doesn't convert them. 
+
+    coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
     if make_debug_plots==True:     
         print(f"[DEBUG] coords.dec[:5]: {coords.dec[:5]}")
         print(f"[DEBUG] coords.dec.unit: {coords.dec.unit}")
@@ -810,6 +763,21 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
+    sfd = SFDQuery()
+    if use_extinction:
+        ebv_vals = sfd(coords)
+    else:
+        ebv_vals = np.zeros(len(distances))
+
+    if gal_lat_cut is not None:
+        b = coords.galactic.b.deg
+        mask = np.abs(b) > gal_lat_cut
+        ra, dec = ra[mask], dec[mask]
+        distances = distances[mask]
+        peak_times = peak_times[mask]
+        file_indx = file_indx[mask]
+        ebv_vals = ebv_vals[mask]
+        coords = coords[mask]
 
     #slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)
     #slicer.slice_points['ra'] = ra
