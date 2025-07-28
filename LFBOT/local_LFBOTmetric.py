@@ -73,8 +73,8 @@ class LC:
 
             m0_g = rng.uniform(-22, -19.5)  # peak absolute mag
             t0 = 5     # time of peak (days)
-            alpha_rise = rng.uniform(0.25, 2.5)
-            alpha_fade = rng.uniform(0.15, 0.45)
+            alpha_rise = rng.uniform(0.5, 2.5)
+            alpha_fade = rng.uniform(0.5, 1)
             alpha_fade = 2.2
 
             # print(f"m0:_g:{m0_g},t0:{t0},rise:{alpha_rise},fade:{alpha_fade}")
@@ -174,6 +174,8 @@ class Base_Metric(BaseMetric):
 # --------------------------------------------
 class Detect_Metric(Base_Metric):
     """
+    This chart string is outdated: 
+    
     LFBOT Detection Metric
 
     This metric implements the detection criteria for Luminous Fast Blue Optical Transients (LFBOTs),
@@ -258,9 +260,6 @@ class Detect_Metric(Base_Metric):
         self.latest_obs_record = obs_record if detected else None
     
         return 1.0 if detected else 0.0
-
-
-
 
 # --------------------------------------------
 # Characterization Metric for LFBOTs

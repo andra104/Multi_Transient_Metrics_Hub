@@ -104,30 +104,33 @@ def uniform_wfd_sky(n_points, mask_map, nside=64, seed=None):
 # Plotting light curves from pkl file
 # --------------------------------------------
 
-def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time = True, plot_overlap=False):
+def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time=True, plot_overlap=False, ylim=None):
     '''
-    templates_file is the path to the pkl with the lc templates
-    num is how many we plot, starting at the beginning of the file
+    Parameters
+    ----------
+    templates_file : str
+        Path to the pickle file containing LC templates.
+    num : int
+        Number of light curves to plot (from beginning of file).
+    use_log_time : bool
+        Whether to use log(time) on the x-axis.
+    plot_overlap : bool
+        If True, plot all LCs on one figure; otherwise, one plot per LC.
+    ylim : tuple or None
+        y-axis limits as (ymin, ymax). If None, don't set.
     '''
     lcdict = pickle.load(open(templates_file, "rb"))
     filters = ['u', 'g', 'r', 'i', 'z', 'y']
     colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
 
-    fname = os.path.basename(templates_file).lower()
-    
-    # if "lfbot" in fname:
-    #     use_log_time = False  
-    # elif "grb" in fname:
-    #     use_log_time = True   # Use log time for GRB
-    # else:
-    #     use_log_time = True   # Default to log if unsure
-
-
     for i in range(num):
+        if not plot_overlap:
+            plt.figure()
+
         for f in filters:
             time_vals = lcdict["lightcurves"][i][f]['ph']
             if use_log_time:
-                time_vals = np.log10(time_vals + 1e-5)  # Logarithmic scale
+                time_vals = np.log10(time_vals + 1e-5)
 
             plt.plot(
                 time_vals,
@@ -141,13 +144,15 @@ def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time = True, plot_over
         plt.xlabel("log time (days)" if use_log_time else "time (days)")
         plt.ylabel("absolute mag")
         plt.gca().invert_yaxis()
-        plt.ylim(-5,-25) #-15,20 was original shar
+        if ylim is not None:
+            plt.ylim(ylim)
         plt.legend()
-        if plot_overlap==False:
-            plt.show()
-    if plot_overlap!=False:
-        plt.show()
 
+        if not plot_overlap:
+            plt.show()
+
+    if plot_overlap:
+        plt.show()
 
 # --------------------------------------------
 # Helper function to apply either redshift or distance (directly)
