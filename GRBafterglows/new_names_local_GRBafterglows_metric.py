@@ -47,10 +47,11 @@ def generate_grb_lc_from_rc(mag_peak_rc, alpha, t_jetbreak):
     # Pre-break power-law decay
     mag_grid[1] = mag_grid[0] + 2.5 * alpha * np.log10(t_jetbreak / 0.01) 
 
+
     # Post-break segment: steeper decline
     t_end = t_grid[2]
     new_decay = 10 * (np.log10(t_end + 1)) - 10 * (np.log10(t_jetbreak + 1))
-    mag_grid[2] = mag_grid[1] + new_decay
+    mag_grid[2] = mag_grid[1] + new_decay 
 
     return t_grid, mag_grid
     
@@ -85,7 +86,6 @@ class LC:
 
         rng = np.random.default_rng(42)
         peak_mag_range = (-31.6, -18.47) 
-        # peak_mag_range = (-25.1,-25) #shar
 
         for _ in range(num_lightcurves):
             # --- Draw intrinsic Rc properties
@@ -198,6 +198,8 @@ class Base_Metric(BaseMetric):
                 
         return detected
 
+
+        
 #shar removed betterdetect cause we don't use it
     
 
@@ -327,9 +329,15 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
             if np.sum(good) < 4:
                 return 0.0
             n_filters = len(np.unique(filters[good]))
-            duration = np.ptp(times[good]) #duration of at least 3 days and less than two weeks
-            if n_filters >= 3 and duration >= 3 and duration >= 14:
-                return 1.0
+            if n_filters<3:
+                return 0.0
+            # duration = np.ptp(times[good]) #duration of at least 3 days and less than two weeks
+            for time in times[good]:
+                diffs = times[good]-time
+                for diff in diffs:
+                    if diff>=3 and diff<=14: #if there is one pair of times with 3-14 day separation
+                        return 1.0
+
         return 0.0
 
 # --------------------------------------------
@@ -421,8 +429,6 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
         return list(all_metrics.values())
     else:
         return [all_metrics[name] for name in include if name in all_metrics]
-
-
 
 
 

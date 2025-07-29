@@ -28,7 +28,6 @@ import os
 import pickle 
 
 DEBUG = False
-MAXGAP = 1
 
 # --------------------------------------------
 # Light Curve Model for LFBOTs
@@ -75,7 +74,7 @@ class LC:
             t0 = 5     # time of peak (days)
             alpha_rise = rng.uniform(0.5, 2.5)
             alpha_fade = rng.uniform(0.5, 1)
-            alpha_fade = 2.2
+            # alpha_fade = 2.2
 
             # print(f"m0:_g:{m0_g},t0:{t0},rise:{alpha_rise},fade:{alpha_fade}")
 
@@ -84,6 +83,7 @@ class LC:
             for i, t in enumerate(self.t_grid):
                 if t < t0:
                     mag_g[i] = m0_g - 2.5 * alpha_rise * np.log10(t / t0)
+                    # mag_g[i] = m0_g - (np.exp(t)-np.exp(t0))
                 else:
                     mag_g[i] = m0_g + 2.5 * alpha_fade * np.log10(t / t0)
 
@@ -147,24 +147,51 @@ class Base_Metric(BaseMetric):
         snr = np.array(snr)
         times = np.array(times)
     
-        # Identify all detections above 3σ and 5σ
-        idx_3sigma = snr >= 3
-        idx_5sigma = snr >= 5
+        # # Identify all detections above 3σ and 5σ
+        # idx_3sigma = snr >= 3
+        # idx_5sigma = snr >= 5
     
-        # Option A: Strict 3σ ×3 with at least one 5σ, and all within 0.5 days
-        if np.sum(idx_3sigma) >= 3:
-            t_detected = times[idx_3sigma]
-            if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
-                detected = True
+        # # Option A: Strict 3σ ×3 with at least one 5σ, and all within 0.5 days
+        # if np.sum(idx_3sigma) >= 3:
+        #     t_detected = times[idx_3sigma]
+        #     if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
+        #         detected = True
     
-        # Option B: ≥1 detection at 5σ + ≥2 total detections ≥15min apart
-        elif np.sum(idx_5sigma) >= 1:
-            t_detected = times[idx_5sigma]
-            if len(t_detected) >= 2 and np.ptp(t_detected) >= 0.0104:  # ~15 min
-                detected = True
-    
+        # # Option B: ≥1 detection at 5σ + ≥2 total detections ≥15min apart
+        # elif np.sum(idx_5sigma) >= 1:
+        #     t_detected = times[idx_5sigma]
+        #     if len(t_detected) >= 2 and np.ptp(t_detected) >= 0.0104:  # ~15 min
+        #         detected = True
+        
+        detected_part_1=False
+        #new detection criteria: two in different filters in the night, two in same filter in six nights
+        snr_good = snr>5
+        times_good = times[snr_good]
+        filters_good = filters[snr_good]
+        for i, time in enumerate(times_good):
+            time_diff = (0<(times_good-time)) * ((times_good-time)<0.5) #must two obs in same filter between 0 and half a day
+            # print(time_diff)
+            if len(np.unique(filters_good[time_diff])) >=2:
+                detected_part_1 = True
+                break
+        if not detected_part_1:
+            return detected
+            
+        for f in np.unique(filters):
+            mask = filters == f
+            times_in_filter = times[mask]
+            snr_in_filter = snr[mask]
+            observed_detection_times = times_in_filter[snr_in_filter >= 5]
+            if len(observed_detection_times)>=2: #require 2+ detections in the same filter
+                for i, time in enumerate(observed_detection_times):
+                    time_diff = (1<(observed_detection_times-time)) * ((observed_detection_times-time)<6)
+                    # print(observed_detection_times-time)
+                    if np.sum(time_diff)>0:
+                        # print("found one")
+                        detected = True
+                        return detected
+        
         return detected
-
 
 
     
@@ -238,7 +265,7 @@ class Detect_Metric(Base_Metric):
             'last_det_mjd': last_det_mjd,
             #'rise_time_days': rise_time,
             'fade_time_days': fade_time,
-            'sid': slice_point['sid'],
+            'sid_duplicate': slice_point['sid'],
             'file_indx': slice_point['file_indx'],
             'ra': slice_point['ra'],
             'dec': slice_point['dec'],
@@ -298,20 +325,75 @@ class LFBOTCharacterizeMetric(Base_Metric):
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        is_detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        mjd_obs = obs_record.get('mjd_obs', np.array([]))
+        detected=False
+        
+        if is_detected:
+            # print("about to print slice point peak time") #shar
+            # print(np.shape(slice_point['peak_time'] ))
+            # print(slice_point['peak_time'] )
+            peak_time = slice_point['peak_time']+self.mjd0  #not confident these are in order
+            # print("peak_time: ", peak_time)
+            # print("shape mjd obs", np.shape(mjd_obs))
+            time_is_before_peak = mjd_obs<peak_time
+            if np.sum(time_is_before_peak)<2:
+                return detected
+            snr_before_peak = snr[time_is_before_peak]
+            snr_good = snr_before_peak>5
+            times_before_peak = mjd_obs[time_is_before_peak]
+            times_good = times_before_peak[snr_good]    
 
+            # print("shape time is before peak: ", np.shape(time_is_before_peak))
+            # print("shape peak time: ", np.shape(peak_time))
+            # print(type(time_is_before_peak))
+            # print("time is before peak: ",time_is_before_peak)
+            
+            # print("len(times_before_peak): ", len(times_before_peak))
+            # print("original len(mjd_obs): ",len(mjd_obs))
+            # print("max of times_before_peak: ", np.max(times_before_peak))
+            # print("max, min of mjd_obs: ", np.max(mjd_obs),np.min(mjd_obs))
+            
+            filters_before_peak = filters[time_is_before_peak]
+            # print("len times_before_peak: ", len(times_before_peak))
 
-        if detected:
-            good = snr >= 3
-            if np.sum(good) < 4:
-                return 0.0
-            n_filters = len(np.unique(filters[good]))
-            duration = np.ptp(times[good])
-            if duration >= 3:
-                return 1.0
-        return 0.0
-
-
+            detected_part_1=False
+            #new detection criteria: two in different filters in the night, two in same filter in six nights
+            
+            
+            filters_good = filters_before_peak[snr_good]
+            # print("len snr good: ", len(snr_good))
+            if len(times_good)<3: #obviously we need at least three detections
+                return detected
+            for i, time in enumerate(times_good):
+                # print("time: ",time)
+                # print("shape good time: ", np.shape(times_good))
+                time_diff = (0<(mjd_obs-time)) * ((mjd_obs-time)<0.5) #must two obs in different filter between 0 and half a day
+                # print("time diff: ",time_diff)
+                if len(np.unique(filters_good[time_diff])) >=2:
+                    detected_part_1 = True 
+                    break
+            if not detected_part_1:
+                return detected
+                
+            for f in np.unique(filters): #now looking for observations in the same filter before peak
+                mask = filters_before_peak == f
+                times_in_filter = times_before_peak[mask]
+                snr_in_filter = snr_before_peak[mask]
+                observed_detection_times = times_in_filter[snr_in_filter >= 5]
+                if len(observed_detection_times)>=2: #require 2+ detections in the same filter
+                    detected=True
+                    return detected
+                    # for i, time in enumerate(observed_detection_times):
+                    #     # time_diff = (1<(observed_detection_times-time)) * ((observed_detection_times-time)<6)
+                    #     # print(observed_detection_times-time)
+                    #     if np.sum(time_diff)>0:
+                    #         # print("found one")
+                    #         detected = True
+                    #         return detected
+                        
+            
+        return detected
     
 
 # --------------------------------------------
@@ -324,6 +406,9 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
     all_metrics = {
         'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
         'characterize': LFBOTCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'GRBcharacterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'GRB_spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'GRBDetect': GRBDetect_Metric(lc_model=lc_model, use_extinction=use_extinction)
     }
 
     if include is None:
@@ -332,4 +417,161 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
         return [all_metrics[name] for name in include if name in all_metrics]
 
 
+
+
+# --------------------------------------------
+# Characterization metric — extended multi-band follow-up
+# --------------------------------------------
+class GRBAfterglowCharacterizeMetric(Base_Metric):
+    """
+    Characterization metric for GRB Afterglows.
+
+    This metric tests whether the transient can be sufficiently characterized for follow-up
+    science goals. An event is considered 'characterized' if it meets two criteria:
+    
+    (1) At least 4 observations with signal-to-noise ratio (SNR) ≥ 5. 
+    (2) Among those detections, the observations span at least 3 different filters 
+        and cover a duration of at least 3 days and less than two weeks.
+
+    These thresholds are motivated by the need to capture the transient's color evolution 
+    and fading behavior across multiple bands and epochs, which are key for identifying
+    and classifying GRB afterglows compared to other fast-evolving transients.
+    
+    This design ensures that events classified as 'characterized' have sufficient
+    multi-band and temporal information to allow basic modeling and comparison to 
+    theoretical GRB afterglow light curves.
+    """
+    def __init__(self, **kwargs):
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(**kwargs, load_from="LFBOT_templates.pkl", use_extinction=use_extinction)
+        self.metricName = kwargs.get('metricName', 'GRB_Characterize')
+        self.obs_records = {}  # <-- NEW: to store all detected event records individually
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
+        
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        detected = self.parent_instance.GRB_detect(filters, snr, times, obs_record)
+        if detected:
+            good = snr >= 5
+            if np.sum(good) < 4:
+                return 0.0
+            n_filters = len(np.unique(filters[good]))
+            duration = np.ptp(times[good]) #duration of at least 3 days and less than two weeks
+            if n_filters >= 3 and duration >= 3 and duration >= 14:
+                return 1.0
+        return 0.0
+
+# --------------------------------------------
+# Spectroscopic Triggerability Metric
+# Detects if ≥2 filters are triggered within 0.5 days of peak
+# --------------------------------------------
+class GRBAfterglowSpecTriggerableMetric(Base_Metric):
+    """
+    Spectroscopic triggerability metric for GRB Afterglows.
+
+    This metric evaluates whether a GRB afterglow would be suitable for rapid spectroscopic follow-up.
+    An event is considered triggerable if:
+    
+    (0.5) it is detected
+    (1) At least one filter shows brightness < 21 mag within the first two days of peak,
+    (2) It rises faster than 0.3 mag/day in that filter, #always true in our model
+    (3) Both detections used to assess this have SNR >= 5.
+    """
+    def __init__(self, **kwargs):
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(load_from="LFBOT_templates.pkl", **kwargs, use_extinction=use_extinction)
+        self.metricName = kwargs.get('metricName', 'GRB_SpecTrigger')
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
+
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        
+        if obs_record is None or len(obs_record['mjd_obs']) < 2:
+            return 0.0
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        if detected!=True:
+            return 0.0
+        # Sort by time
+        sorted_idx = np.argsort(obs_record['mjd_obs'])
+        for key in obs_record:
+            if isinstance(obs_record[key], np.ndarray):
+                obs_record[key] = obs_record[key][sorted_idx]
+
+        mjd = obs_record['mjd_obs']
+        mags = obs_record['mag_obs']
+        snrs = obs_record['snr_obs']
+        filts = obs_record['filter']
+
+        for f in np.unique(filts):
+            f_mask = (filts == f)
+            if np.sum(f_mask) < 2:
+                continue
+
+            good = f_mask & (snrs >= 5)
+            if np.sum(good) < 2:
+                continue
+
+            t = mjd[good]
+            m = mags[good]
+            best_times = t[m<21]
+            
+            if len(best_times) > 0:  
+                peak_time = self.mjd0 + slice_point['peak_time']
+                if np.any (np.abs(best_times - peak_time) < 2):
+                    return 1.0  
+                
+            #assume rise rate is always that fast and detected. 
+            
+            # # Check rise rate
+            # delta_mag = np.diff(m)
+            # delta_time = np.diff(t)
+            # rise_rate = delta_mag / delta_time  # Positive = fading, Negative = rising
+
+            # #if np.any(rise_rate < -0.3) and np.any(m < 21): #we don't have rise rates atm
+            # #if np.any(np.abs(rise_rate) > 0.3) and np.any(m < 21): # triggers if any rapid brightness change (fading or rising) AND magnitude is bright enough
+
+
+        return 0.0
+
+class GRBDetect_Metric(Base_Metric):
+    """ 
+
+    Option A: ≥2 detections in a single filter, ≥30 minutes apart
+    
+    Option B: ≥2 epochs, second has ≥2 filters; first can be a non-detection
+    
+    This is an “either/or” detection logic. 
+    
+    This event is detected if it passes either the intra-night multi-detection or the epoch-based detection criteria.
+    
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.metricName = kwargs.get('metricName', 'GRBDetect')
+        self.obs_records = {}  # <-- NEW: to store all detected event records individually
+        self.parent_instance = Base_Metric()
+
+
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+    
+        if obs_record is None:
+            # print("OBSRECORD IS NONE SHAR")
+            return self.badval
+    
+        if self.filter_include is not None:
+            # print("filter include stuff shar")
+            keep = np.isin(filters, self.filter_include)
+            snr = snr[keep]
+            filters = filters[keep]
+            times = times[keep]
+            for k in ['mjd_obs', 'mag_obs', 'snr_obs', 'filter']:
+                if isinstance(obs_record[k], np.ndarray):
+                    obs_record[k] = obs_record[k][keep]
+ 
+        detected = self.parent_instance.GRB_detect(filters, snr, times, obs_record)
+    
+
+    
+        return 1.0 if detected else 0.0
 
