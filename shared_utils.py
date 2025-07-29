@@ -219,10 +219,10 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             for i in range(n_events):
                 out.write(f"{i},{n_filters_detected_per_event[i]}\n")
     '''
+    print(f'changes made 1')
     n_events = len(slicer.slice_points['distance'])
     note = "scheduler_note not like 'long%'"
-    # is_grb = hasattr(metric, '__name__') and 'GRBafterglow' in metric.__name__
-
+    is_grb = hasattr(metric, '__name__') and 'GRBafterglow' in metric.__name__
     for cadence in cadences:
         print(f"\n--- Running {cadence} ---")
         opsdb = os.path.join(db_dir, f"{cadence}.db")
@@ -449,9 +449,11 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
         resultsDb = db.ResultsDb(out_dir=outDir)
         
         print(f"\n--- Running {cadence} ---")
-
+        print(np.shape(multi_metrics))
+        print(multi_metrics)
 
         for one_metric in multi_metrics:
+            print("We are in one_metric")
             mb_key = f"{runName}_{one_metric.__class__.__name__}"
             if ignore_triples == True:
                 bundle = metric_bundles.MetricBundle(one_metric, slicer, '' + note, file_root=mb_key, plot_funcs=[], summary_metrics=[metrics.SumMetric()])
@@ -461,13 +463,17 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
             bd = maf.metricBundles.make_bundles_dict_from_list([bundle])
             bgroup = metric_bundles.MetricBundleGroup({mb_key: bundle}, opsdb, out_dir=outDir, results_db=resultsDb)
             bgroup.run_all()
+            print("We just ran all")
 
             if first:
+                print("We out here")
                 df = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 df["run"] = runName
                 df["n_events_full_sky"] =  n_events  
                 first = 0
+                print(df)
             else:
+                print("Now in else")
                 _ = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 _["run"] = runName
                 _["n_events_full_sky"] =  n_events              
