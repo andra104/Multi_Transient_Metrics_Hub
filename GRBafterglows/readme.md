@@ -45,34 +45,72 @@ Conversion is handled by the `apply_spectral_index()` function in `shared_utils`
 
 ## 3. Detection Logic
 
-Detection is defined as **either**:
-1. **Intra-night detection**: ≥2 detections in the **same filter**, ≥30 minutes apart.
-2. **Epoch-based detection**: ≥2 observing epochs, second epoch with ≥2 filters detected.
+A GRB afterglow is considered **detected** if the survey captures **at least two high-significance observations in the same filter** that meet all of the following criteria:
 
-Events must have **SNR ≥ 5** in detections used for triggering.
+1. **Signal-to-noise ratio (SNR) ≥ 5** for both detections.
+2. **Minimum separation** of `0.5 hours` (`0.05 / 24` hours) between the first and second detection in that filter.
+3. **Maximum allowed gap** (`MAXGAP`) of `1 day` between any two detections in that filter.
 
+The logic proceeds as follows:
+- Loop over each LSST filter (`u, g, r, i, z, y`) that has been observed for the event.
+- Select only the observation times in that filter where `SNR ≥ 5`.
+- Check whether there are **at least two** such detections.
+- If yes, verify that:
+  - The **time span** between the earliest and latest qualifying detections in that filter is ≥ 0.5 hours.
+  - The **shortest gap** between consecutive detections does not exceed `1 day`.
+- If both conditions are satisfied in **any filter**, the event is flagged as **detected**.
+
+**This ensures that detections are not due to a single spurious point,  
+and that there is enough temporal spacing to confirm a real astrophysical transient.**
 ---
 
 ## 4. Characterization Logic
 
-A GRB is considered **characterized** if:
-- ≥4 detections with **SNR ≥ 5**.
-- At least **3 distinct filters**.
-- Temporal coverage spanning **≥3 days and ≤14 days**.
+A GRB afterglow is considered **characterized** if it satisfies all of the following conditions:
 
-This ensures enough temporal and color coverage for basic modeling and classification.
+1. **It has already been detected** according to the detection logic.
+2. At least **4 observations** with `SNR ≥ 5` exist for the event.
+3. These qualifying observations span at least **3 distinct LSST filters**.
+4. The **time baseline** between the earliest and latest qualifying detections is:
+   - At least `3 days` (ensuring temporal coverage of the evolving light curve), and
+   - At most `14 days` (ensuring the sampling is relevant to the rapid-evolution phase of GRB afterglows).
+
+The logic proceeds as follows:
+- Use the same detection procedure described in the Detection Logic section to confirm the event is real.
+- Select only the observations with `SNR ≥ 5`.
+- Count how many of these observations exist (`≥ 4 required`).
+- Check how many **unique filters** are represented (`≥ 3 required`).
+- Compute the total **duration** (`latest_time - earliest_time`) of these observations.
+- Accept the event as **characterized** if both the minimum and maximum duration constraints are met.
+
+This ensures that an event is not just discovered but is followed with **sufficient multi-band and temporal coverage**  
+to allow meaningful modeling of its color evolution and decay rate, both of which are key to distinguishing GRB afterglows from other fast-evolving transients
 
 ---
 
 ## 5. Spectroscopic Triggerability Logic
 
-A GRB is **triggerable** for spectroscopy if:
-- It is **detected**.
-- **Within 2 days of peak**:
-  - Brightness `< 21` mag in at least one filter.
-  - Both detections have **SNR ≥ 5**.
+A GRB afterglow is considered **spectroscopically triggerable** if it meets the following criteria:
 
-This provides a realistic estimate of events that could be followed up with large telescopes before fading.
+1. **It has already been detected** according to the detection logic.
+2. The event has at least **two detections in the same filter** with:
+   - `SNR ≥ 5` for both measurements.
+   - Brightness `< 21 mag` in that filter for at least one of the measurements.
+3. At least one of these bright detections occurs **within 2 days of the modeled peak time**.
+
+The logic proceeds as follows:
+- Confirm the event passes the **detection** test.
+- Sort the event’s observations in time.
+- Loop over each filter observed for the event.
+- Select only the observations in that filter with `SNR ≥ 5`.
+- Require **at least two** such observations in the same filter to avoid spurious triggers.
+- Among those detections, identify the ones brighter than `21 mag`.
+- If any bright detection occurs **within ±2 days** of the modeled peak time,  
+  the event is marked as **spectroscopically triggerable**.
+
+This logic identifies events that are not only detectable but **bright and early enough** for rapid spectroscopic follow-up,  
+increasing the likelihood that follow-up telescopes can capture valuable early-time afterglow spectra before significant fading occurs.
+
 
 ---
 
