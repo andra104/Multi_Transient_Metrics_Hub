@@ -69,8 +69,13 @@ class LC:
             print(f"Loaded LFBOT templates from {load_from}")
             return
 
+        # RILEY: in g as an example, a typical flare on a mid range dwarf would have a brightness change of 0.7-1 mag, then would return to quiescence in less than hour. 
+        #RILEY: emperical flare template 
+        
 
-        # Rise and fade rates - us is fake
+        # Rise and fade rates - u is fake
+        #Rise: Quiescent to Peak brightness
+        #Fade: Peak to Return to quiescence
         self.rise_rates = {'u': (0.01, 4.5), 'g': (0.009, 3.89), 'r': (0.005, 2.15), 'i': (0.0027, 0.415),
                            'z': (0.002, 0.113), 'y': (0.0014, 0.051)}
         self.fade_rates = {'u': (0.005, 1.0), 'g': (0.006, 0.79), 'r': (0.003, 0.44), 'i': (0.0019, 0.085),
@@ -81,33 +86,52 @@ class LC:
 
 
         # --- Time Grid Construction ---
+        # Units: days from peak.
+        # Pre-flare: Up to 7 days before peak
+        # Rise: Short ramp-up (~1.2 hours before peak)
+        # Fade: Return to quiescence over ~1.5 days
+        # Combines all phases into a unified time axis
+
         t_quiescent = np.linspace(-7.0, -0.05, num_samples // 5)
         t_rise = np.linspace(-0.05, 0, num_samples // 5)
         t_fade = np.linspace(0.01, 1.5, num_samples) #1.5 is correct 
-
         self.t_grid = np.concatenate([t_quiescent, t_rise, [0], t_fade])
 
         for _ in range(num_lightcurves):
             lc = {}
             for f in self.filts:
+                #Draw a random baseline brightness from range
                 qmin, qmax = QUIESCENT_MAG_RANGES[f]
                 quiescent = rng.uniform(qmin, qmax)
+                
+                # Flares brighten the star by delta_mag magnitudes (default = 5 mag) (could be the problem)
                 peak_mag = quiescent - delta_mag
                 rise = rng.uniform(*self.rise_rates[f])
                 fade = rng.uniform(*self.fade_rates[f])
 
+                # Quiescent: Constant magnitude
+                # Rise: Steep brightening
+                # Peak: Single point at t=0
+                # Fade: Slowly dims back toward quiescence
+                
                 mag_quiescent = np.full_like(t_quiescent, quiescent)
                 mag_rise = peak_mag - rise * (t_rise - np.min(t_rise)) / np.ptp(t_rise)
                 mag_peak = np.full((1,), peak_mag)
                 mag_fade = peak_mag + fade * (np.log10(1 + t_fade))
 
+                #Joins all phases into one magnitude array
                 mag_f = np.concatenate([mag_quiescent, mag_rise, mag_peak, mag_fade])
 
+                #ph: Phase/time values
+                #mag: Magnitudes at each phase
                 lc[f] = {'ph': self.t_grid, 'mag': mag_f}
 
             self.data.append(lc)
 
     def interp(self, t, filtername, lc_indx=0):
+        # Retrieves interpolated magnitude for time(s) t
+        # lc_indx: Which flare template to use
+        # Outside valid range, return 99 (treated as no data)
         return np.interp(t,
                          self.data[lc_indx][filtername]['ph'],
                          self.data[lc_indx][filtername]['mag'],
@@ -145,6 +169,16 @@ class Base_Metric(BaseMetric):
 
 
     def detect(self, filters, snr, times, obs_record):
+        """
+        Detection Criteria:
+
+        Option A:  ≥3 detections ≥3σ  AND  ≥1 detection ≥5σ, All within 0.5 days
+        
+        Option B:  ≥2 detections ≥5σ  AND  separated by ≥15 min (0.0104 days)
+        
+        If either condition is met, detected = True
+        Else, detected = False
+        """
         detected = False
     
         filters = np.array(filters)
@@ -154,17 +188,30 @@ class Base_Metric(BaseMetric):
         idx_3sigma = snr >= 3
         idx_5sigma = snr >= 5
     
-        # Option A: 3×3σ detections with at least one 5σ, all within 0.5 days
+        # Option A: 3x3σ detections with at least one 5σ, all within 0.5 days - VERY STRINGENT
         if np.sum(idx_3sigma) >= 3:
             t_detected = times[idx_3sigma]
             if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
                 detected = True
     
-        # Option B: truly transient fallback — ≥2×5σ detections ≥15 min apart
+        # Option B: truly transient fallback — ≥2x5σ detections ≥15 min apart - VERY STRINGENT
         elif np.sum(idx_5sigma) >= 2:
             t_detected = times[idx_5sigma]
             if np.ptp(t_detected) >= 0.0104:  # 15 minutes
                 detected = True
+
+        # Option C: Short-timescale detection (relaxed) 
+        # ≥3 detections ≥3σ within 3 days, at least one ≥5σ
+        if np.sum(idx_3sigma) >= 3:
+            t_detected = times[idx_3sigma]
+            if np.ptp(t_detected) <= 3.0 and np.any(idx_5sigma):  # was 0.5 days
+                detected = True
+    
+        # Option D: Strong detections over survey timescale 
+        # ≥2 detections ≥5σ in ANY two epochs (no strict same-night requirement)
+        elif np.sum(idx_5sigma) >= 2:
+            detected = True 
+
     
         return detected
 
