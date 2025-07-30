@@ -60,8 +60,9 @@ The logic proceeds as follows:
   - The **shortest gap** between consecutive detections does not exceed `1 day`.
 - If both conditions are satisfied in **any filter**, the event is flagged as **detected**.
 
-**This ensures that detections are not due to a single spurious point,  
-and that there is enough temporal spacing to confirm a real astrophysical transient.**
+This ensures that detections are not due to a single spurious point,  
+and that there is enough temporal spacing to confirm a real astrophysical transient.
+
 ---
 
 ## 4. Characterization Logic
