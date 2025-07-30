@@ -140,13 +140,13 @@ def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time=True, plot_overla
                 alpha=0.5
             )
 
-        plt.title(f"Light curve template #{i}")
-        plt.xlabel("log time (days)" if use_log_time else "time (days)")
-        plt.ylabel("absolute mag")
+        plt.title(f"Light Curve Template #{i}",size=20)
+        plt.xlabel("Log Time (days)" if use_log_time else "Time (days)",size=15)
+        plt.ylabel("Absolute Mag",size=15)
         plt.gca().invert_yaxis()
         if ylim is not None:
             plt.ylim(ylim)
-        plt.legend()
+        plt.legend(prop={'size': 15})
 
         if not plot_overlap:
             plt.show()
@@ -192,7 +192,7 @@ def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
 # Run detect metric
 # --------------------------------------------
 
-def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, df_file, ignore_triples=False, debug=True, plot=True, clean_temp=False, use_extinction=True):
+def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, df_file, is_grb=False, ignore_triples=False, debug=True, plot=True, clean_temp=False, use_extinction=True):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -223,7 +223,6 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
     n_events = len(slicer.slice_points['distance'])
     note = "scheduler_note not like 'long%'"
     is_grb = hasattr(metric, '__name__') and 'GRBafterglow' in metric.__name__
-
     for cadence in cadences:
         print(f"\n--- Running {cadence} ---")
         opsdb = os.path.join(db_dir, f"{cadence}.db")
@@ -449,12 +448,9 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
         os.makedirs(outDir, exist_ok=True)
         resultsDb = db.ResultsDb(out_dir=outDir)
         
-        print("Changes made")
         print(f"\n--- Running {cadence} ---")
         print(np.shape(multi_metrics))
         print(multi_metrics)
-
-
 
         for one_metric in multi_metrics:
             print("We are in one_metric")
@@ -657,7 +653,8 @@ def load_or_generate_population(use_extinction, pop_file, t_start=1, t_end=3652,
 # Population generator
 # --------------------------------------------
 def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
-                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, gal_lat_cut=None, rate_density=None, 
+                         d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, 
+                       gal_lat_cut=None, rate_density=None, 
                          load_from=None, save_to=None, make_debug_plots=True):
     """
     Generate a population of  afterglows with realistic extinction and sky distribution.
@@ -860,7 +857,7 @@ def generate_Templates(LC, save_to,
     """
     # Create the directory if it doesn't exist
     Path(save_to).parent.mkdir(parents=True, exist_ok=True)
-
+    
     lc_model = LC(num_lightcurves=num_lightcurves, load_from=None)
     with open(save_to, "wb") as f:
         pickle.dump({'lightcurves': lc_model.data, 't_grid': lc_model.t_grid}, f)
@@ -894,9 +891,11 @@ def load_or_generate_templates(LC, templates_file,
     """
     if generate_new or not os.path.exists(templates_file):
         print(f"[INFO] Generating {num_lightcurves} light curve templates.")
-        generate_Templates(LC, num_samples=num_samples,
-                           num_lightcurves=num_lightcurves,
-                           save_to=templates_file)
+        generate_Templates(LC, 
+                           save_to=templates_file, 
+                           num_samples=num_samples,
+                           num_lightcurves=num_lightcurves
+                           )
     else:
         print(f"[INFO] Loading light curve templates from {templates_file}.")
     return LC(load_from=templates_file)
