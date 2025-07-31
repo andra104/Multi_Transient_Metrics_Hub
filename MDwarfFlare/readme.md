@@ -1,44 +1,63 @@
-# M Dwarf Flare Metric for LSST Cadence Evaluation
+# M Dwarf Flare‑Only Light Curve Model
 
 ## Overview
-This metric simulates and evaluates the detectability and classification of **M Dwarf Flares** in Rubin Observatory LSST survey cadences.  
-It models synthetic flare light curves based on empirical quiescent magnitude distributions, injects them across the sky, and measures how often LSST would detect and classify these short-lived events.
+This model simulates **short‑duration flares** on M dwarfs **without including a quiescent baseline in the light curve output**.  
+It is designed for fast‑evolving events lasting from **30 minutes to 4 hours**, where the brightness quickly rises and then drops instantly back to the quiescent level.  
 
-The M Dwarf flare metric supports:
-- **Detection efficiency**: Fraction of flares meeting minimum discovery criteria.
-- **Characterization**: Events with enough time sampling to distinguish between classical and complex (multi-peaked) flare morphologies. TBD
-
-The design follows observed M Dwarf flare properties from:
-- **UltraCoolSheet**: Empirical quiescent magnitude distributions.
-- **Stellar flare surveys**: Typical amplitudes, durations, and decay behaviors.
+The model supports:
+- **Variable flare durations** per simulated event.
+- **Randomized quiescent brightness** based on empirical distributions.
+- **Randomized flare amplitude** between **0.7 and 1.0 magnitudes** brighter than the star’s quiescent level.
+- **Instant drop‑off** after peak brightness — no extended fade tail.
 
 ---
 
-## 1. Light Curve Model
+## Light Curve Structure
 
-M Dwarf flares are modeled with:
-- **Constant pre-flare phase** (~7 days before peak)
-- **Fast rise** (<1 hour to peak)
-- **Sharp peak** (t = 0)
-- **Fading tail** (~1.5 days to quiescence) -> Needs to be shorter.
+Each flare consists of:
+1. **Rise Phase**  
+   Duration: **15–30 %** of total flare duration.  
+   Steep, nearly linear brightening toward peak.  
 
-**Current Issue:** Needs to be only a .7-1 mag difference between quiescence and peak. Very fast return to quiescence needs to be less than hour. Need a better law to govern the light curve. 
+2. **Peak**  
+   Single point at **t = 0**.  
 
-Quiescent magnitudes are drawn from filter-specific ranges (empirical UltraCoolSheet values):
-
-| Filter | Quiescent Mag Range |
-|--------|--------------------|
-| u | 17.5 – 20.5 |
-| g | 16.5 – 19.5 |
-| r | 15.0 – 18.0 |
-| i | 13.0 – 15.5 |
-| z | 12.0 – 13.5 |
-| y | 11.5 – 12.7 |
-
-**Flare amplitude**: Brightens by `Δmag` (default 5.0 mag) from quiescence.  
-**Rise/fade rates**: Drawn from filter-specific empirical/fitted ranges.
+3. **Instant Drop**  
+   Immediately after the peak, the light curve returns to quiescent level in one step.  
 
 ---
+
+## Parameter Ranges
+
+| Parameter | Description | Range / Value |
+|-----------|-------------|---------------|
+| **Total Duration** | Time from flare start to return to quiescent | `0.02–0.17` days (≈ 30 min – 4 hr) |
+| **Rise Fraction** | Fraction of total duration spent in rise | `0.15–0.3` |
+| **Quiescent Magnitude (u)** | Random draw per flare | `17.5–20.5` |
+| **Quiescent Magnitude (g)** | Random draw per flare | `16.5–19.5` |
+| **Quiescent Magnitude (r)** | Random draw per flare | `15.0–18.0` |
+| **Quiescent Magnitude (i)** | Random draw per flare | `13.0–15.5` |
+| **Quiescent Magnitude (z)** | Random draw per flare | `12.0–13.5` |
+| **Quiescent Magnitude (y)** | Random draw per flare | `11.5–12.7` |
+| **Flare Amplitude** | Brightness increase above quiescent | `0.7–1.0` mag |
+| **Rise Rate** | Steepening of rise to peak | `5–15` mag/day |
+| **Fade** | Instant return to quiescent | N/A |
+
+---
+
+## Output Data
+
+Each simulated light curve stores:
+- **`ph`** – Phase/time array for the flare (days relative to peak)  
+- **`mag`** – Magnitude array corresponding to the flare evolution  
+- **`rise_time_days`** – Duration of rise phase (days)  
+- **`fade_time_days`** – Duration of fade phase (days) — near zero for instant drop events  
+
+---
+
+## Example Shape
+
+
 
 ## 2. Extinction and Distance
 
@@ -65,14 +84,7 @@ Detection is currently not entirely determined as option A and B are too stringe
 
 A flare is **characterized** if:
 - ≥4 detections above 0.5σ (minimum sampling)
-- Then tested for **complexity**:
-  - **Complex flare**: ≥2 peaks above 1.5σ separated by ≥0.1 days
-  - **Classical flare**: Otherwise
-
-Returns (yet to be implemented):
-- `1.0` -> Complex flare
-- `0.5` -> Classical flare
-- `0.0` -> Not characterizable
+....TBD?
 
 ---
 
