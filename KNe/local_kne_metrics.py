@@ -232,32 +232,79 @@ class Base_Metric(BaseMetric):
             if np.sum(mask) < 2:
                 continue
     
-            t_f = times[mask]
+            t_f = obs_record['mjd_obs'][mask] #swapping it to be in mjd
             if np.max(t_f) - np.min(t_f) < min_dt:
                 continue
     
-            mag_order = np.argsort(t_f)
+            mag_order = np.argsort(t_f) #making everything chronological
             t_f = t_f[mag_order]
             mag_f = obs_record['mag_obs'][mask][mag_order]
             snr_f = obs_record['snr_obs'][mask][mag_order]
-            mag_unc_f = 2.5 * np.log10(1. + 1. / snr_f)
+            mag_unc_f = 2.5 * np.log10(1. + 1. / snr_f) #uncertainty
     
-            idx_max = np.argmax(mag_f)
-            idx_min = np.argmin(mag_f)
-            if idx_max == idx_min:
-                continue
-    
-            dt = np.abs(t_f[idx_max] - t_f[idx_min])
-            if dt < min_dt:
-                continue
-    
-            brightening = mag_f[idx_min] + mag_unc_f[idx_min]
-            fading = mag_f[idx_max] - mag_unc_f[idx_max]
-    
-            if brightening < fading:
-                slope = (mag_f[idx_max] - mag_f[idx_min]) / dt
-                if slope >= min_fade or slope <= max_rise:
+            # idx_max = np.argmax(mag_f)
+            # idx_min = np.argmin(mag_f)
+            # if idx_max == idx_min:
+            #     continue
+            
+            # dt = np.abs(t_f[idx_max] - t_f[idx_min])  
+            #change in time between brightest and dimmest detection           
+            #do we care that we're looking at both the rise and the fade?
+
+            rise_mask = t_f <= t_f[np.argmin(mag_f)] #minimum mag = brightest. time before brightest mask
+            fade_mask = t_f >= t_f[np.argmin(mag_f)]
+            # print("sum rise mask: ", np.sum(rise_mask), "sum fade mask: ", np.sum(fade_mask))
+            
+            #brightening criterion
+            for i in range(len(t_f[rise_mask])): #for time before peak
+                time_gap = np.abs(t_f[rise_mask] - t_f[rise_mask][i]) #array of all time gaps
+                # print(time_gap)
+                mag_diff = np.abs(mag_f[rise_mask] - mag_f[rise_mask][i]) #array of all mag gaps
+                # print(mag_diff)
+                time_gap_map = time_gap > min_dt
+                slope = mag_diff[time_gap_map]/time_gap[time_gap_map] #divide each element
+                if np.any(slope >= np.abs(max_rise)): # compare
+                    # print("True in rise")
+                    # print("slope", slope)
                     return True, slope, f
+                    
+            #fading criterion
+            for i in range(len(t_f[fade_mask])):
+                time_gap = np.abs(t_f[fade_mask] - t_f[fade_mask][i])
+                # print(time_gap)
+                mag_diff = np.abs(mag_f[fade_mask] - mag_f[fade_mask][i])
+                time_gap_map = time_gap > min_dt
+                slope = mag_diff[time_gap_map]/time_gap[time_gap_map] #divide each element
+                # print(mag_diff)
+                if np.any(slope >= min_fade):
+                    # print("True in fade")
+                    # print("slope", slope)
+                    return True, slope, f
+                    
+            # if dt < min_dt:
+            #     continue
+            # print("dt: ",dt)
+            # print("mag_f[idx_min] - brightest: ",mag_f[idx_min])
+            # print("that time stamp: ",t_f[idx_min])
+            # print("mag_f[idx_max] - dimmest: ",mag_f[idx_max])
+            # print("that time stamp: ",t_f[idx_max])
+            # print("mag_unc_f[idx_min]: ",mag_unc_f[idx_min])
+            # print("mag_unc_f[idx_max]: ",mag_unc_f[idx_max])
+            
+            # brightening = mag_f[idx_min] + mag_unc_f[idx_min] #minimum (brightest) magnitude plus error
+            # fading = mag_f[idx_max] - mag_unc_f[idx_max] #maximum (dimmest) magnitude plus error
+            # print("brightening: ",brightening)
+            # print("fading: ",fading)    
+            # if brightening < fading: #if the brightest magnitude is less than dimmest plus error
+            #     slope = (mag_f[idx_max] - mag_f[idx_min]) / dt
+            #     print("brightening is less than fading \n slope: ",slope)
+            #     if slope >= min_fade or slope <= max_rise:
+            #         print("met criteria!")
+            #         if slope >= min_fade:
+            #             print("slope >= min_fade")
+            #         if slope <= max_rise:
+            #             print("slope <= max_rise")
+            #         return True, slope, f
         return False, None, None
 
 # --------------------------------------------
@@ -406,8 +453,8 @@ class KNeCharacterizeColorEvolveMetric(Base_Metric):
                 if abs(t2 - t1) >= self.min_sep_days:
                     overlap = set(f1).intersection(set(f2))
                     if len(overlap) >= 1:
-                        print(pairs[i])
-                        print(pairs[j], "\n")
+                        # print(pairs[i])
+                        # print(pairs[j], "\n")
                         return 1.0
 
         return 0.0
