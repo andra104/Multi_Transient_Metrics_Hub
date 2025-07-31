@@ -55,10 +55,6 @@ Each simulated light curve stores:
 
 ---
 
-## Example Shape
-
-
-
 ## 2. Extinction and Distance
 
 - **Galactic Extinction**: Optional; applied using the SFD dust map (`dustmaps.sfd.SFDQuery`) with extinction coefficients from `rubin_sim.phot_utils.DustValues`.
