@@ -786,6 +786,16 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
     slicer.slice_points['gall'] = coords.galactic.l.deg
     slicer.slice_points['galb'] = coords.galactic.b.deg
     slicer.slice_points['theta_obs'] = theta_obs
+    # Assuming all filters have same rise/fade for given event
+    rise_times = []
+    fade_times = []
+    for idx in file_indx:
+        rise_times.append(self.lc_model.data[idx]['g']['rise_time_days'])
+        fade_times.append(self.lc_model.data[idx]['g']['fade_time_days'])
+    
+    slicer.slice_points['rise_time_days'] = np.array(rise_times)
+    slicer.slice_points['fade_time_days'] = np.array(fade_times)
+
 
     
     if save_to:
