@@ -130,7 +130,7 @@ class Base_Metric(BaseMetric):
                  mjd0=60980.5, outputLc=False, badval=-666,
                  filter_include=None,
                  load_from="GRBAfterglow_templates.pkl",
-                 lc_model=None, use_extinction=True,  # <-- NEW
+                 lc_model=None, use_extinction=True, use_kcorrect=True,k_correct_type=None,k_correct_arg=None, # <-- NEW
                  **kwargs):
         """
         Parameters
@@ -152,6 +152,9 @@ class Base_Metric(BaseMetric):
         self.outputLc = outputLc
         self.filter_include = filter_include
         self.use_extinction = use_extinction
+        self.use_kcorrect = use_kcorrect
+        self.k_correct_type = k_correct_type
+        self.k_correct_arg = k_correct_arg
         self.extinction_printed = False
 
         cols = [mjdCol, m5Col, filterCol, nightCol]
@@ -278,7 +281,7 @@ class Detect_Metric(Base_Metric):
             'mag_obs': obs_record.get('mag_obs', np.array([])).tolist(),
             'snr_obs': obs_record.get('snr_obs', np.array([])).tolist(),
             'mjd_obs': obs_record.get('mjd_obs', np.array([])).tolist(),
-            'theta_obs': slice_point['theta_obs'],
+            # 'theta_obs': slice_point['theta_obs'],
             'filter': obs_record.get('filter', np.array([])).tolist(),
             'distance_modulus': 5 * np.log10(slice_point['distance'] * 1e6) - 5
         })    
@@ -316,10 +319,11 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
     """
     def __init__(self, **kwargs):
         use_extinction = kwargs.pop('use_extinction', True)
-        super().__init__(**kwargs, use_extinction=use_extinction)
+        use_kcorrect = kwargs.pop('use_kcorrect', True)
+        super().__init__(**kwargs, use_extinction=use_extinction, use_kcorrect=use_kcorrect)
         self.metricName = kwargs.get('metricName', 'GRB_Characterize')
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric(use_extinction=use_extinction)
+        self.parent_instance = Base_Metric(use_extinction=use_extinction, use_kcorrect=use_kcorrect)
         
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
@@ -358,9 +362,10 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
     """
     def __init__(self, **kwargs):
         use_extinction = kwargs.pop('use_extinction', True)
-        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs, use_extinction=use_extinction)
+        use_kcorrect = kwargs.pop('use_kcorrect', True)
+        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs, use_extinction=use_extinction,use_kcorrect=use_kcorrect)
         self.metricName = kwargs.get('metricName', 'GRB_SpecTrigger')
-        self.parent_instance = Base_Metric(use_extinction=use_extinction)
+        self.parent_instance = Base_Metric(use_extinction=use_extinction,use_kcorrect=use_kcorrect)
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
@@ -415,14 +420,14 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 # --------------------------------------------
 # Multi_Metric Standardized Call
 # --------------------------------------------
-def get_multi_metrics(lc_model, include=None, use_extinction=True):
+def get_multi_metrics(lc_model, include=None, use_extinction=True,use_kcorrect=True):
     """
     Return a list of metrics. `include` can be a list of metric names to include.
     """
     all_metrics = {
-        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
-        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
-        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect),
+        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect),
+        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect),
     }
 
     if include is None:

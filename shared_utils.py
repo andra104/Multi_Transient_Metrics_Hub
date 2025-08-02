@@ -192,7 +192,7 @@ def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
 # Run detect metric
 # --------------------------------------------
 
-def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, df_file, is_grb=False, ignore_triples=False, debug=True, plot=True, clean_temp=False, use_extinction=True):
+def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, df_file, use_extinction, use_kcorrect, k_correct_type=None, k_correct_arg=None,is_grb=False, ignore_triples=False, debug=True, plot=True, clean_temp=False):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -219,7 +219,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             for i in range(n_events):
                 out.write(f"{i},{n_filters_detected_per_event[i]}\n")
     '''
-    print(f'changes made 1')
+    # print(f'changes made 1')
     n_events = len(slicer.slice_points['distance'])
     note = "scheduler_note not like 'long%'"
     is_grb = hasattr(metric, '__name__') and 'GRBafterglow' in metric.__name__
@@ -236,7 +236,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
         for filt in filters:
             detect = metric.Detect_Metric(metricName=f"Detect_{filt}",
                                           lc_model=shared_lc_model,
-                                          use_extinction=use_extinction)
+                                          use_extinction=use_extinction, use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg)
             if ignore_triples:
                 per_filter_metrics[f"Detect_{filt}"] = metric_bundles.MetricBundle(
                     detect, slicer, note)
@@ -420,7 +420,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
 
 
 
-def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, summary_filename, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True):
+def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, storage_dir, summary_filename, ignore_triples=False, plot=True, clean_temp=False, use_extinction=True, use_kcorrect=True):
     '''
     Runs the detect metric on given cadences and light curves
     
@@ -453,7 +453,7 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
         print(multi_metrics)
 
         for one_metric in multi_metrics:
-            print("We are in one_metric")
+            # print("We are in one_metric")
             mb_key = f"{runName}_{one_metric.__class__.__name__}"
             if ignore_triples == True:
                 bundle = metric_bundles.MetricBundle(one_metric, slicer, '' + note, file_root=mb_key, plot_funcs=[], summary_metrics=[metrics.SumMetric()])
@@ -463,17 +463,17 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
             bd = maf.metricBundles.make_bundles_dict_from_list([bundle])
             bgroup = metric_bundles.MetricBundleGroup({mb_key: bundle}, opsdb, out_dir=outDir, results_db=resultsDb)
             bgroup.run_all()
-            print("We just ran all")
+            # print("We just ran all")
 
             if first:
-                print("We out here")
+                # print("We out here")
                 df = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 df["run"] = runName
                 df["n_events_full_sky"] =  n_events  
                 first = 0
                 print(df)
             else:
-                print("Now in else")
+                # print("Now in else")
                 _ = pd.DataFrame([bd[k].summary_values for k in bd], index=list(bd.keys()))
                 _["run"] = runName
                 _["n_events_full_sky"] =  n_events              
@@ -693,6 +693,18 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
 
     dec = np.clip(dec, -89.9999, 89.9999)
     #dec_rad = np.radians(dec)
+    # coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
+    coords = SkyCoord(ra * u.deg, dec * u.deg, frame='icrs') #this line correctly converts them and labels them
+
+    print("Len ra before masking: ", len(ra))
+    if gal_lat_cut is not None:
+        b = coords.galactic.b.deg
+        print("b: ", b)
+        mask = np.abs(b) < gal_lat_cut #shar switched this to less
+        print("len mask, num true in mask: ", len(mask),np.sum(mask))
+        ra, dec = ra[mask], dec[mask]
+        print("len ra after masking: ", len(ra))
+    
     
     slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
     #print(f"Print 10 = {ra[:10],dec[:10]}")
@@ -712,13 +724,54 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
-    theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
+    # theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
     distances = rng.uniform(d_min, d_max, n_events)
     peak_times = rng.uniform(t_start, t_end, n_events)
+    print("initial peak times: ",peak_times)
     file_indx = rng.integers(0, num_lightcurves, len(ra))
     
 
+
+    sfd = SFDQuery()
+    if use_extinction:
+        ebv_vals = sfd(coords)
+    else:
+        ebv_vals = np.zeros(len(distances))
+    
+
+    # if gal_lat_cut is not None:
+    #     b = coords.galactic.b.deg
+    #     print("b: ", b)
+    #     mask = np.abs(b) < gal_lat_cut #shar switched this to less
+    #     print("len mask, num true in mask: ", len(mask),np.sum(mask))
+    #     ra, dec = ra[mask], dec[mask]
+        
+    #     distances = distances[mask]
+    #     peak_times = peak_times[mask]
+    #     print("len peak times after masking: ", len(peak_times))
+    #     file_indx = file_indx[mask]
+    #     ebv_vals = ebv_vals[mask]
+    #     coords = coords[mask]
+    #     print("gal_lat_cut is not None")
+    #     slicer.slice_points['distance'] = distances
+    #     slicer.slice_points['peak_time'] = peak_times
+    #     slicer.slice_points['file_indx'] = file_indx
+    #     slicer.slice_points['ebv'] = ebv_vals
+    #     slicer.slice_points['gall'] = coords.galactic.l.deg
+    #     slicer.slice_points['galb'] = coords.galactic.b.deg
+    #     slicer.slice_points['theta_obs'] = theta_obs
+    # else:
+    slicer.slice_points['distance'] = distances
+    slicer.slice_points['peak_time'] = peak_times
+    slicer.slice_points['file_indx'] = file_indx
+    slicer.slice_points['ebv'] = ebv_vals
+    slicer.slice_points['gall'] = coords.galactic.l.deg
+    slicer.slice_points['galb'] = coords.galactic.b.deg
+    # slicer.slice_points['theta_obs'] = theta_obs
+    # slicer.slice_points['k_correction'] = k_correction
+    print("gal_lat_cut is none")
     #print(t_start, t_end, n_events)
+    
     if make_debug_plots==True:  
         plt.hist(peak_times,  bins=50)
         plt.xlabel("peak time")
@@ -733,17 +786,6 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.show()
 
 
-    
-    #print(f"[DEBUG] dec sample before SkyCoord: {dec[:5]}")
-    #print(f"[DEBUG] dec units? min={np.min(dec):.2f}, max={np.max(dec):.2f}")
-    
-        #print(f"[DEBUG]Print 5 sample before SkyCoord - ra,dec: {slicer.slice_points}")
-        # print("[DEBUG 7]: Do you see me")
-
-
-    #coords = SkyCoord(ra=slicer.slice_points['ra'] * u.deg, dec=slicer.slice_points['dec'] * u.deg, frame='icrs') - this code just labels them as deg. u.deg doesn't convert them. 
-
-    coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
     if make_debug_plots==True:     
         print(f"[DEBUG] coords.dec[:5]: {coords.dec[:5]}")
         print(f"[DEBUG] coords.dec.unit: {coords.dec.unit}")
@@ -760,41 +802,21 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         plt.grid(True)
         plt.show()
 
-    sfd = SFDQuery()
-    if use_extinction:
-        ebv_vals = sfd(coords)
-    else:
-        ebv_vals = np.zeros(len(distances))
-
-    if gal_lat_cut is not None:
-        b = coords.galactic.b.deg
-        mask = np.abs(b) > gal_lat_cut
-        ra, dec = ra[mask], dec[mask]
-        distances = distances[mask]
-        peak_times = peak_times[mask]
-        file_indx = file_indx[mask]
-        ebv_vals = ebv_vals[mask]
-        coords = coords[mask]
-
     #slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)
     #slicer.slice_points['ra'] = ra
     #slicer.slice_points['dec'] = dec
-    slicer.slice_points['distance'] = distances
-    slicer.slice_points['peak_time'] = peak_times
-    slicer.slice_points['file_indx'] = file_indx
-    slicer.slice_points['ebv'] = ebv_vals
-    slicer.slice_points['gall'] = coords.galactic.l.deg
-    slicer.slice_points['galb'] = coords.galactic.b.deg
-    slicer.slice_points['theta_obs'] = theta_obs
-    # Assuming all filters have same rise/fade for given event
-    rise_times = []
-    fade_times = []
-    for idx in file_indx:
-        rise_times.append(self.lc_model.data[idx]['g']['rise_time_days'])
-        fade_times.append(self.lc_model.data[idx]['g']['fade_time_days'])
+
+    #shar commenting this out because there is no self here
     
-    slicer.slice_points['rise_time_days'] = np.array(rise_times)
-    slicer.slice_points['fade_time_days'] = np.array(fade_times)
+    # Assuming all filters have same rise/fade for given event
+    # rise_times = []
+    # fade_times = []
+    # for idx in file_indx:
+    #     rise_times.append(self.lc_model.data[idx]['g']['rise_time_days'])
+    #     fade_times.append(self.lc_model.data[idx]['g']['fade_time_days'])
+    
+    # slicer.slice_points['rise_time_days'] = np.array(rise_times)
+    # slicer.slice_points['fade_time_days'] = np.array(fade_times)
 
 
     
@@ -823,6 +845,7 @@ def build_filenames(rate_density,
                         testname_metric_only=None,
                         ignore_triples=None,                   
                         use_extinction=None,
+                        use_kcorrect=None,
                         base_dir=None):
     """
     Construct filenames for saving templates, filename, output dataframe, storage_dir, summary_filename
@@ -843,7 +866,7 @@ def build_filenames(rate_density,
     if base_dir==None:
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
         
-    label = science_case + f"_den_{rate_density}_d_{d_min}-{d_max}_Mpc_z_{z_min}-{z_max}_Mpc_ext_{use_extinction}_{testname}"
+    label = science_case + f"_den_{rate_density}_d_{d_min}-{d_max}_Mpc_z_{z_min}-{z_max}_Mpc_ext_{use_extinction}_kcor_{use_kcorrect}_{testname}"
     print(label)
 
     storage_dir = os.path.join(base_dir, science_case)
@@ -969,23 +992,34 @@ def apply_spectral_index(mag_ref, filtername, ref_filter="Rc", beta=-0.75):
 def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     """
     Evaluate light curve at the location and time of the slice point.
-    Apply extinction and distance modulus.
+    Apply extinction, k-correction, and distance modulus.
     """
-    if not np.isscalar(slice_point['peak_time']):
-        raise ValueError(f"Non-scalar peak_time: shape={np.shape(slice_point['peak_time'])}")
+    # if not np.isscalar(slice_point['peak_time']):
+    #     print("slice_point['file_indx']: ",slice_point['file_indx'])
+    #     print("type peak time: ", type(slice_point['peak_time']))
+    #     raise ValueError(f"Non-scalar peak_time: shape={np.shape(slice_point['peak_time'])}. slice_point['file_indx']: ",slice_point['file_indx'])
 
-    t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
+    t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time'] 
     mags = np.zeros(t.size)
-
+    
     for f in np.unique(dataSlice[self.filterCol]):
         infilt = np.where(dataSlice[self.filterCol] == f)
         mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
+        
+        if self.use_kcorrect:
+            # print("Applying k-correction")
+            z = z_at_value(cosmo.comoving_distance, slice_point['distance'] * u.Mpc)
+            k_correction = apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
+            mags[infilt] = mags[infilt] + k_correction
+
+            
         if self.use_extinction:
             mags[infilt] += self.ax1[f] * slice_point['ebv']
             if not self.extinction_printed:
                 print("EBV included")
                 self.extinction_printed = True
         #mags[infilt] += self.ax1[f] * slice_point['ebv']
+        
         mags[infilt] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
 
     snr = m52snr(mags, dataSlice[self.m5Col])
@@ -1003,3 +1037,138 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
         return snr, filters, times, obs_record
     print("DID YOU NOT RETURN THE OBS RECORD ON PURPOSE??")
     return snr, filters, times, None
+
+
+FILTER_CENTRAL_FREQS = {
+    'u': 8.088e14,
+    'g': 6.293e14,
+    'r': 4.844e14,
+    'i': 3.979e14,
+    'z': 3.461e14,
+    'y': 3.080e14,
+}
+
+def get_kcorrection_powerlaw(z, obs_filter, spectral_index):
+    """
+    Calculate k-correction for power-law spectrum: f_ν ∝ ν^α
+    
+    For a pure power law, k-correction is the same for all filters.
+    This is because the power law is scale-invariant.
+    
+    Parameters
+    ----------
+    z : float
+        Redshift
+    obs_filter : str
+        Observed filter ('u', 'g', 'r', 'i', 'z', 'y')
+    spectral_index : float
+        Power-law spectral index α where f_ν ∝ ν^α
+        For GRB afterglows: α ≈ -0.75 (flux increases with frequency)
+        
+    Returns
+    -------
+    k_correction : float
+        K-correction in magnitudes (positive = dimmer)
+    """
+    # For pure power law f_ν ∝ ν^α:
+    # K = 2.5 * (1 - α) * log10(1 + z)
+    # This accounts for both spectral slope and cosmological dimming
+    
+    k_corr = 2.5 * (1 - spectral_index) * np.log10(1 + z)
+    
+    return k_corr
+
+
+def get_kcorrection_blackbody(z, obs_filter, temperature):
+    """
+    Calculate k-correction for blackbody spectrum.
+    
+    Parameters
+    ----------
+    z : float
+        Redshift
+    obs_filter : str
+        Observed filter
+    temperature : float
+        Blackbody temperature in Kelvin
+        
+    Returns
+    -------
+    k_correction : float
+        K-correction in magnitudes
+    """
+    # print(z)
+    # Physical constants
+    h = 6.626e-34  # J⋅s
+    k_b = 1.381e-23  # J/K
+    c = 2.998e8  # m/s
+    
+    # Get observed frequency
+    nu_obs = FILTER_CENTRAL_FREQS[obs_filter]
+    
+    # Rest-frame frequency being observed
+    nu_rest = nu_obs * (1 + z)
+    
+    # Planck function ratio: B_ν(rest) / B_ν(obs)
+    x_rest = h * nu_rest / (k_b * temperature)
+    # print(x_rest)
+    x_obs = h * nu_obs / (k_b * temperature)
+    flux_ratio = np.zeros(len(x_rest))
+    # Overflow protection: if x > ~700, exp(x) overflows
+    for i in range(len(x_rest)):
+        if x_rest[i]> 700 or x_obs > 700:
+            # print("using Wien approximation")
+            # Use Wien approximation: B_ν ∝ ν³ exp(-x)
+            flux_ratio[i] = (nu_rest[i]/nu_obs)**3 * np.exp(x_obs - x_rest[i])
+        else:
+            # print("using planck function")
+            planck_rest = nu_rest[i]**3 / (np.exp(x_rest[i]) - 1)
+            planck_obs = nu_obs**3 / (np.exp(x_obs) - 1)
+            flux_ratio[i] = planck_rest / planck_obs
+ 
+
+        
+
+    
+    # Convert to magnitude difference
+    k_corr = -2.5 * np.log10(flux_ratio)
+    
+    # Add cosmological (1+z) dimming factor
+    k_corr += 2.5 * np.log10(1 + z)
+    
+    return k_corr
+
+
+def apply_kcorrection(z, obs_filter, spectrum_type, k_correct_arg):
+    """
+    Unified function to apply k-correction based on spectrum type.
+    
+    Parameters
+    ----------
+    z : float
+        Redshift
+    obs_filter : str
+        Observed filter
+    spectrum_type : str
+        'powerlaw' or 'blackbody'
+    **kwargs : 
+        For powerlaw: spectral_index (float)
+        For blackbody: temperature (float, Kelvin)
+        
+    Returns
+    -------
+    k_correction : float
+        K-correction in magnitudes
+    """
+    if spectrum_type == 'powerlaw':
+        # if 'spectral_index' not in kwargs:
+        #     raise ValueError("Must provide 'spectral_index' for powerlaw spectrum")
+        return get_kcorrection_powerlaw(z, obs_filter, k_correct_arg)
+    
+    elif spectrum_type == 'blackbody':
+        # if 'temperature' not in kwargs:
+        #     raise ValueError("Must provide 'temperature' for blackbody spectrum")
+        return get_kcorrection_blackbody(z, obs_filter, k_correct_arg)
+    
+    else:
+        raise ValueError(f"Unknown spectrum_type: {spectrum_type}")
