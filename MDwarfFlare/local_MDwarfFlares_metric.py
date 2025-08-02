@@ -285,9 +285,7 @@ MAXGAP = 1
 #             self.data[lc_indx][filtername]['mag'],
 #             left=99, right=99
 #         )
-import numpy as np
-import os
-import pickle
+
 
 class LC:
     """
@@ -333,33 +331,32 @@ class LC:
             rise_fraction = rng.uniform(0.15, 0.3)  # fraction for rise phase
 
             # Time arrays
-            t_rise = np.linspace(-rise_fraction * total_duration, 0, 12, endpoint=False)
-            t_drop = np.array([0.0, total_duration])  # peak + end
-            t_grid_event = np.concatenate([t_rise, t_drop])
-
+            t_rise = np.linspace(-rise_fraction * total_duration, 0, 12, endpoint=False)  # rise to peak
+            t_fade = np.linspace(0, total_duration, 12)  # fade starting at peak (t=0)
+            t_grid_event = np.concatenate([t_rise, t_fade])
+            
             # Rise/fade durations
-            rise_time_days = abs(t_rise[0])  # days
-            fade_time_days = total_duration - rise_time_days
-
+            rise_time_days = abs(t_rise[0])  # days from start of rise to peak
+            fade_time_days = total_duration  # fade duration starts at peak
+            
             for f in self.filts:
-                # Quiescent level
                 qmin, qmax = QUIESCENT_MAG_RANGES[f]
                 quiescent = rng.uniform(qmin, qmax)
-
+            
                 # Peak brightness
                 peak_mag = quiescent - rng.uniform(0.7, 1.0)
-
-                # Rise profile (linear steep brightening)
+            
+                # Rise: steep brightening to peak
                 rise_rate = rng.uniform(5, 15)
                 mag_rise = peak_mag - rise_rate * (t_rise - np.min(t_rise)) / np.ptp(t_rise)
-
-                # Peak + instant drop to quiescent
-                mag_peak = np.array([peak_mag])
-                mag_quiescent = np.array([quiescent])
-
-                # Combine magnitudes
-                mag_f = np.concatenate([mag_rise, mag_peak, mag_quiescent])
-
+            
+                # Fade: instant from peak and over `t_fade`
+                fade_rate = rng.uniform(8, 20)
+                mag_fade = peak_mag + fade_rate * (t_fade / total_duration)
+            
+                # Combine: rise + fade
+                mag_f = np.concatenate([mag_rise, mag_fade])
+            
                 lc[f] = {
                     'ph': t_grid_event,
                     'mag': mag_f,
@@ -374,6 +371,7 @@ class LC:
         ph = self.data[lc_indx][filtername]['ph']
         mag = self.data[lc_indx][filtername]['mag']
         return np.interp(t, ph, mag, left=99, right=99)
+
 
 # ------------------------------------------------------
 # Base MDwarfFlare Metric
