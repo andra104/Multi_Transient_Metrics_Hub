@@ -703,9 +703,10 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
         mask = np.abs(b) < gal_lat_cut #shar switched this to less
         print("len mask, num true in mask: ", len(mask),np.sum(mask))
         ra, dec = ra[mask], dec[mask]
+        coords = coords[mask]
         print("len ra after masking: ", len(ra))
     
-    
+    n_events = len(ra)
     slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
     #print(f"Print 10 = {ra[:10],dec[:10]}")
     #print(f" Value = {slicer.slice_points}")

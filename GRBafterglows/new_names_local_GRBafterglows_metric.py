@@ -95,7 +95,7 @@ class LC:
             trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
             alpha_fade = trunc_alpha.rvs(random_state=rng)
 
-            t_jetbreak = rng.uniform(1, 5)  # Days
+            t_jetbreak = rng.uniform(1, 10)  # Days
             
             # --- Build Rc light curve
             t_vals, mag_rc = generate_grb_lc_from_rc(mag_peak_rc, alpha_fade, t_jetbreak)
@@ -182,22 +182,26 @@ class Base_Metric(BaseMetric):
                   
         # if len(observed_detection_times)>=1: #use this if you want to test just one detection
         #     detected = True 
-        
-        MAXGAP = 1
+
+        #OLD DETECTION CRITERIA HERE THROUGH THE BREAK
+        # MAXGAP = 1
             
-        for f in np.unique(filters):
-            mask = filters == f
-            times_in_filter = times[mask]
-            snr_in_filter = snr[mask]
-            observed_detection_times = times_in_filter[snr_in_filter >= 5]
-            if len(observed_detection_times)>=2: #require 2+ detections
-                if np.ptp(observed_detection_times) >= .5 / 24 and np.diff(np.sort(observed_detection_times)).min() <= MAXGAP :
-                    detected = True
-                    break  
+        # for f in np.unique(filters):
+        #     mask = filters == f
+        #     times_in_filter = times[mask]
+        #     snr_in_filter = snr[mask]
+        #     observed_detection_times = times_in_filter[snr_in_filter >= 5]
+        #     if len(observed_detection_times)>=2: #require 2+ detections
+        #         if np.ptp(observed_detection_times) >= .5 / 24 and np.diff(np.sort(observed_detection_times)).min() <= MAXGAP :
+        #             detected = True
+        #             break  
             
             # if len(observed_detection_times)>=1: #use this if you want to test just one detection
             #     detected = True 
-            #     break    
+            #     break  
+        #NEW CRITERIA Two detections with snr>10, to be confident about color. Any filter; no time constraints
+        if np.sum(snr>10)>1:
+            detected = True
                 
         return detected
 
@@ -288,6 +292,7 @@ class Detect_Metric(Base_Metric):
 
         self.obs_records[slice_point['sid']] = obs_record
         self.latest_obs_record = obs_record if detected else None
+        
     
         return 1.0 if detected else 0.0
 
@@ -327,21 +332,42 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
         
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
-        if detected:
-            good = snr >= 5
-            if np.sum(good) < 4:
-                return 0.0
-            n_filters = len(np.unique(filters[good]))
-            if n_filters<3:
-                return 0.0
-            # duration = np.ptp(times[good]) #duration of at least 3 days and less than two weeks
-            for time in times[good]:
-                diffs = times[good]-time
-                for diff in diffs:
-                    if diff>=3 and diff<=14: #if there is one pair of times with 3-14 day separation
-                        return 1.0
-
+        #OLD BELOW HERE
+        
+        # detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        # if detected:
+        #     good = snr >= 5
+        #     if np.sum(good) < 4:
+        #         return 0.0
+        #     n_filters = len(np.unique(filters[good]))
+        #     if n_filters<3:
+        #         return 0.0
+        #     # duration = np.ptp(times[good]) #duration of at least 3 days and less than two weeks
+        #     for time in times[good]:
+        #         diffs = times[good]-time
+        #         for diff in diffs:
+        #             if diff>=3 and diff<=14: #if there is one pair of times with 3-14 day separation
+        #                 return 1.0
+        
+        #NEW HERE
+        #Two detections in the same filter with a perceptible mag change of .1 or more
+        for f in np.unique(filters):
+            mask = (filters == f) & (snr >= 5)
+            if np.sum(mask)<2: #need at least two detections
+                continue
+            times_in_filter = times[mask]
+            snr_in_filter = snr[mask]
+            mags_in_filter = obs_record['mag_obs'][mask]
+            if np.sum(np.abs(snr_in_filter - obs_record['snr_obs'][mask]))>0:
+                print("ERROR ERROR INDEXING ERROR") #shar
+                print(np.sum(np.abs(snr_in_filter - obs_record['snr_obs'][mask])))
+            for mag in mags_in_filter:
+                # print(mags_in_filter - mag)
+                if np.any(np.abs(mags_in_filter - mag)>.1):
+                    # print("we got a detection!")
+                    return 1.0 
+            # observed_detection_times = times_in_filter[snr_in_filter >= 5]
+        
         return 0.0
 
 # --------------------------------------------
@@ -420,14 +446,14 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
 # --------------------------------------------
 # Multi_Metric Standardized Call
 # --------------------------------------------
-def get_multi_metrics(lc_model, include=None, use_extinction=True,use_kcorrect=True):
+def get_multi_metrics(lc_model, use_kcorrect, include=None, use_extinction=True, k_correct_type=None, k_correct_arg=None):
     """
     Return a list of metrics. `include` can be a list of metric names to include.
     """
     all_metrics = {
-        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect),
-        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect),
-        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect),
+        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
+        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
+        'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
     }
 
     if include is None:

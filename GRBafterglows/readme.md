@@ -22,7 +22,7 @@ GRB afterglows are modeled as **power-law decays with a jet break**:
 
 `m(t) = m_0 + 2.5 * α * log10(t / t_0)`
 
-- **Pre-break**: Shallow decay slope (`α = 1.5`).
+- **Pre-break**: Shallow decay slope (`α around 1.5`).
 - **Post-break**: Steeper decline (multiplied decay rate after the jet break time).
 - **Jet break**: Randomized between `1–5` days.
 - **Peak brightness**: Drawn from a range `(-31.6, -18.47)` mag (absolute, Rc band).
@@ -32,6 +32,11 @@ The **reference light curve** is generated in **Rc-band** from Cenko et al. 2009
 `F_ν ∝ ν^β,   β = -0.75`
 
 Conversion is handled by the `apply_spectral_index()` function in `shared_utils`.
+
+NOTE: code that generates alpha:
+            a, b = (.5 - 1.5) / .5, (1.7 - 1.5) / .5
+            trunc_alpha = truncnorm(a=a, b=b, loc=1.5, scale=.5)
+            alpha_fade = trunc_alpha.rvs(random_state=rng)
 
 ---
 

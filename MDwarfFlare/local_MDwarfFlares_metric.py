@@ -304,7 +304,7 @@ class LC:
         self.t_grid = np.linspace(-0.05, 0.17, 15)  # dummy representative grid
 
         # Quiescent magnitude ranges (for amplitude reference)
-        QUIESCENT_MAG_RANGES = {
+        QUIESCENT_MAG_RANGES = { 
             'u': (17.5, 20.5),
             'g': (16.5, 19.5),
             'r': (15.0, 18.0),
@@ -327,7 +327,7 @@ class LC:
             lc = {}
 
             # Pick random flare duration in days (0.02 = 30min, 0.17 = 4hr)
-            total_duration = rng.uniform(0.02, 0.17)
+            total_duration = rng.uniform(0.02, 0.17) 
             rise_fraction = rng.uniform(0.15, 0.3)  # fraction for rise phase
 
             # Time arrays
@@ -341,7 +341,7 @@ class LC:
             
             for f in self.filts:
                 qmin, qmax = QUIESCENT_MAG_RANGES[f]
-                quiescent = rng.uniform(qmin, qmax)
+                quiescent = rng.uniform(qmin, qmax) 
             
                 # Peak brightness
                 peak_mag = quiescent - rng.uniform(0.7, 1.0)
@@ -380,7 +380,8 @@ class Base_Metric(BaseMetric):
     def __init__(self, metricName='Base_Metric',
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
                  filterCol='filter', nightCol='night',
-                 mjd0=60980.5, outputLc=False, badval=-666,
+                 mjd0=60980.5, outputLc=False, badval=-666, use_kcorrect=False,
+                 k_correct_type=None, k_correct_arg=None,
                  filter_include=None, load_from="MDwarfFlares_templates.pkl", use_extinction=True,
                  lc_model=None, **kwargs):
 
@@ -460,6 +461,7 @@ class Detect_Metric(Base_Metric):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.metricName = kwargs.get('metricName', 'Detect')
+        self.use_kcorrect = False #shar hardcoded
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
         self.parent_instance = Base_Metric()
 
@@ -503,7 +505,7 @@ class Detect_Metric(Base_Metric):
             'first_det_mjd': first_det_mjd,
             'last_det_mjd': last_det_mjd,
             #'rise_time_days': rise_time,
-            'fade_time_days': fade_time,
+            # 'fade_time_days': fade_time,
             'sid': slice_point['sid'],
             'file_indx': slice_point['file_indx'],
             'ra': slice_point['ra'],
@@ -517,10 +519,10 @@ class Detect_Metric(Base_Metric):
             'mag_obs': obs_record.get('mag_obs', np.array([])).tolist(),
             'snr_obs': obs_record.get('snr_obs', np.array([])).tolist(),
             'mjd_obs': obs_record.get('mjd_obs', np.array([])).tolist(),
-            'theta_obs': slice_point['theta_obs'],
+            # 'theta_obs': slice_point['theta_obs'],
             'filter': obs_record.get('filter', np.array([])).tolist(),
-            'rise_time_model_days': slice_point['rise_time_days'],
-            'fade_time_model_days': slice_point['fade_time_days'],
+            # 'rise_time_model_days': slice_point['rise_time_days'], #shar commenting out cause they done work right now
+            # 'fade_time_model_days': slice_point['fade_time_days'],
 
             'distance_modulus': 5 * np.log10(slice_point['distance'] * 1e6) - 5
         })    
@@ -584,7 +586,7 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
     """
     all_metrics = {
         'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
-        'characterize': MDwarfFlareCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
+        # 'characterize': MDwarfFlareCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
     }
 
     if include is None:
