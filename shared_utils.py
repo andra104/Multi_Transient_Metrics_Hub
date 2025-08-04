@@ -579,12 +579,13 @@ def sample_rate_from_volume(rate_density, t_start, t_end,
     """
 
     d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
-
-    z_min = z_at_value(cosmo.comoving_distance, d_min * u.Mpc)
-    z_max = z_at_value(cosmo.comoving_distance, d_max * u.Mpc)
-
     years = (t_end - t_start) / 365.25
-    V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
+    if d_max > 1:
+        z_min = z_at_value(cosmo.comoving_distance, d_min * u.Mpc)
+        z_max = z_at_value(cosmo.comoving_distance, d_max * u.Mpc)    
+        V = cosmo.comoving_volume(z_max).to(u.Mpc**3).value - cosmo.comoving_volume(z_min).to(u.Mpc**3).value
+    else: #for things that are close, regular volume
+        V = ((4/3)*np.pi*(d_max**3 - d_min**3))
     return np.random.poisson(rate_density * V * years)
 
 
@@ -1086,7 +1087,7 @@ def get_kcorrection_blackbody(z, obs_filter, temperature):
     
     Parameters
     ----------
-    z : float
+    z : float or array
         Redshift
     obs_filter : str
         Observed filter
@@ -1114,19 +1115,32 @@ def get_kcorrection_blackbody(z, obs_filter, temperature):
     x_rest = h * nu_rest / (k_b * temperature)
     # print(x_rest)
     x_obs = h * nu_obs / (k_b * temperature)
-    flux_ratio = np.zeros(len(x_rest))
-    # Overflow protection: if x > ~700, exp(x) overflows
-    for i in range(len(x_rest)):
-        if x_rest[i]> 700 or x_obs > 700:
+    
+    if type(z)==list or type(z)==np.ndarray:
+        flux_ratio = np.zeros(len(x_rest))
+        # Overflow protection: if x > ~700, exp(x) overflows
+        for i in range(len(x_rest)):
+            if x_rest[i]> 700 or x_obs > 700:
+                # print("using Wien approximation")
+                # Use Wien approximation: B_ν ∝ ν³ exp(-x)
+                flux_ratio[i] = (nu_rest[i]/nu_obs)**3 * np.exp(x_obs - x_rest[i])
+            else:
+                # print("using planck function")
+                planck_rest = nu_rest[i]**3 / (np.exp(x_rest[i]) - 1)
+                planck_obs = nu_obs**3 / (np.exp(x_obs) - 1)
+                flux_ratio[i] = planck_rest / planck_obs
+    else:
+        flux_ratio = 0
+        # Overflow protection: if x > ~700, exp(x) overflows
+        if x_rest> 700 or x_obs > 700:
             # print("using Wien approximation")
             # Use Wien approximation: B_ν ∝ ν³ exp(-x)
-            flux_ratio[i] = (nu_rest[i]/nu_obs)**3 * np.exp(x_obs - x_rest[i])
+            flux_ratio = (nu_rest/nu_obs)**3 * np.exp(x_obs - x_rest)
         else:
             # print("using planck function")
-            planck_rest = nu_rest[i]**3 / (np.exp(x_rest[i]) - 1)
+            planck_rest = nu_rest**3 / (np.exp(x_rest) - 1)
             planck_obs = nu_obs**3 / (np.exp(x_obs) - 1)
-            flux_ratio[i] = planck_rest / planck_obs
- 
+            flux_ratio = planck_rest / planck_obs       
 
         
 
@@ -1136,7 +1150,7 @@ def get_kcorrection_blackbody(z, obs_filter, temperature):
     
     # Add cosmological (1+z) dimming factor
     k_corr += 2.5 * np.log10(1 + z)
-    
+    # print(k_corr)
     return k_corr
 
 
