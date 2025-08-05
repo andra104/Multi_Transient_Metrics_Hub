@@ -200,9 +200,39 @@ class Base_Metric(BaseMetric):
             #     detected = True 
             #     break  
         #NEW CRITERIA Two detections with snr>10, to be confident about color. Any filter; no time constraints
-        if np.sum(snr>10)>1:
-            detected = True
-                
+        # if np.sum(snr>10)>1:
+        #     detected = True
+        
+        detected_part_1 = False
+
+        good = snr >= 10
+        if np.sum(good) < 2:
+            return detected
+        # duration = np.ptp(times[good]) #duration of less than an hour for color
+        for time in times[good]:
+            diffs = times[good]-time
+            if np.any(np.abs(diffs)<(1/24)):
+                detected_part_1 = True
+        if detected_part_1 == False:
+            return detected 
+
+        for f in np.unique(filters):
+            mask = (filters == f) & (snr >= 5)
+            if np.sum(mask)<2: #need at least two detections
+                continue
+            times_in_filter = times[mask]
+            snr_in_filter = snr[mask]
+            mags_in_filter = obs_record['mag_obs'][mask]
+            if np.sum(np.abs(snr_in_filter - obs_record['snr_obs'][mask]))>0:
+                print("ERROR ERROR INDEXING ERROR") #shar
+                print(np.sum(np.abs(snr_in_filter - obs_record['snr_obs'][mask])))
+            for mag in mags_in_filter:
+                # print(mags_in_filter - mag)
+                if np.any(np.abs(mags_in_filter - mag)>.1): #TODO: implement error
+                    # print("we got a detection!")
+                    detected = True
+
+                    
         return detected
 
 
@@ -216,13 +246,7 @@ class Base_Metric(BaseMetric):
 class Detect_Metric(Base_Metric):
     """ 
 
-    Option A: ≥2 detections in a single filter, ≥30 minutes apart
-    
-    Option B: ≥2 epochs, second has ≥2 filters; first can be a non-detection
-    
-    This is an “either/or” detection logic. 
-    
-    This event is detected if it passes either the intra-night multi-detection or the epoch-based detection criteria.
+    currently bronze+silver
     
     """
     def __init__(self, **kwargs):
@@ -305,6 +329,8 @@ class Detect_Metric(Base_Metric):
 # --------------------------------------------
 class GRBAfterglowCharacterizeMetric(Base_Metric):
     """
+    The below is untrue, currently this is just half of detect
+    
     Characterization metric for GRB Afterglows.
 
     This metric tests whether the transient can be sufficiently characterized for follow-up
