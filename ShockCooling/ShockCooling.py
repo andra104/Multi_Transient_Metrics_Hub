@@ -129,6 +129,7 @@ class LC:
     def __init__(self, num_samples = 100, num_lightcurves=1000, load_from=None):
         self.filts = ['u', 'g', 'r', 'i', 'z', 'y']
         self.data = []
+        self.durations = {}
         self.t_grid = None  # 0.1–10 days
 
         if load_from and os.path.exists(load_from):
@@ -136,6 +137,7 @@ class LC:
                 obj = pickle.load(f)
             self.data = obj['lightcurves']
             self.t_grid = obj['t_grid']
+            # self.durations = self.data['durations']
             print(f"Loaded templates from {load_from}")
             return
 
@@ -208,10 +210,17 @@ class LC:
                 t_decline = np.linspace(t_rerise[1], 25, 2)
                 mag_decline = peak_mag_2 + params["final_fade"] * (t_decline - t_decline[0]) 
         
+                # if f not in self.durations:
+                #     self.durations[f] = {'rise': [], 'fade': [], 'rerise': []}
+                # self.durations[f]['rise'].append(np.ptp(t_rise))
+                # self.durations[f]['fade'].append(np.ptp(t_fade))
+                # self.durations[f]['rerise'].append(np.ptp(t_rerise))
+                
                 lightcurve[f] = {'ph': np.concatenate([t_rise, t_fade, t_rerise, t_decline]), 
                      'mag': np.concatenate([mag_rise, mag_fade, mag_rerise, mag_decline])
                      }
-                timeline = np.linspace(lightcurve[f]['ph'][0], lightcurve[f]['ph'][-1], 100)
+                
+                # timeline = np.linspace(lightcurve[f]['ph'][0], lightcurve[f]['ph'][-1], 100)
                 # plt.plot(timeline, np.interp(timeline, lightcurve[f]['ph'],
                 #                  lightcurve[f]['mag'],
                 #                  left=99, right=99))
@@ -221,11 +230,7 @@ class LC:
 
                 
 
-                if f not in self.durations:
-                    self.durations[f] = {'rise': [], 'fade': [], 'rerise': []}
-                self.durations[f]['rise'].append(np.ptp(t_rise))
-                self.durations[f]['fade'].append(np.ptp(t_fade))
-                self.durations[f]['rerise'].append(np.ptp(t_rerise))
+
 
             self.data.append(lightcurve)
 
@@ -277,41 +282,14 @@ class Base_Metric(BaseMetric):
 
 
     def detect(self, filters, snr, times, obs_record):
-        detected = False
+        detected = False     
     
         # Convert to arrays just in case
         filters = np.array(filters)
         snr = np.array(snr)
         times = np.array(times)
-    
-
-        detected_part_1=False
-        #new detection criteria: two in different filters in the night, two in same filter in six nights
-        snr_good = snr>5
-        times_good = times[snr_good]
-        filters_good = filters[snr_good]
-        for i, time in enumerate(times_good):
-            time_diff = (0<(times_good-time)) * ((times_good-time)<0.5) #must two obs in same filter between 0 and half a day
-            # print(time_diff)
-            if len(np.unique(filters_good[time_diff])) >=2:
-                detected_part_1 = True
-                break
-        if not detected_part_1:
-            return detected
-            
-        for f in np.unique(filters):
-            mask = filters == f
-            times_in_filter = times[mask]
-            snr_in_filter = snr[mask]
-            observed_detection_times = times_in_filter[snr_in_filter >= 5]
-            if len(observed_detection_times)>=2: #require 2+ detections in the same filter
-                for i, time in enumerate(observed_detection_times):
-                    time_diff = (1<(observed_detection_times-time)) * ((observed_detection_times-time)<6*3) #shar added *3
-                    # print(observed_detection_times-time)
-                    if np.sum(time_diff)>0:
-                        # print("found one")
-                        detected = True
-                        return detected
+        if np.any(snr>5):
+            detected=True
         
         return detected
 
@@ -407,7 +385,7 @@ class SCECharacterizeMetric(Base_Metric):
         use_extinction = kwargs.pop('use_extinction', True)
         use_kcorrect = kwargs.pop('use_kcorrect', True)
         super().__init__(**kwargs, use_extinction=use_extinction, use_kcorrect=use_kcorrect)
-        self.metricName = kwargs.get('metricName', 'LFBOT_Characterize')
+        self.metricName = kwargs.get('metricName', 'SCECharacterizeMetric')
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
         self.parent_instance = Base_Metric(use_extinction=use_extinction, use_kcorrect=use_kcorrect)
 
@@ -415,30 +393,39 @@ class SCECharacterizeMetric(Base_Metric):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         is_detected = self.parent_instance.detect(filters, snr, times, obs_record)
         mjd_obs = obs_record.get('mjd_obs', np.array([]))
+        # file_indices = np.array(obs_record['file_indx'])
         detected=False
-
+        # print('file_indx ',slice_point['file_indx'])
+        # t_rise   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0]
+        # print('t_rise ',t_rise)
         if is_detected:
             for f in np.unique(filters):
                 #print("[DEBUG] filter", f)
-                mask = (dataSlice[self.filterCol] == f) 
-                t_filt = times[mask]  #time stamps in thet filter
-                snr_filt = snr[mask] #associated SNR
+                mask = (filters == f) & (snr >= 5)
+                # t_rise   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0]
+
+                if np.sum(mask)>0: #shar make 4
+                    t_filt = mjd_obs[mask]  #time stamps in thet filter
+                    snr_filt = snr[mask] #associated SNR
+                    # file_indices_filt = file_indices[mask] #shar test later
+                    # same_thing = [slice_point['file_indx']]
                 
-                if np.sum(snr_filt >= 3) >= 4: #need at least 4 points cause 3 are for sure before peak to be characterized
-                    dur_rise   = shared_lc_model.durations[f][
-                        'rise'][slice_point['file_indx']]#[mask] 
-                    dur_fade   = shared_lc_model.durations[f][
-                        'fade'][slice_point['file_indx']]#[mask]
-                    dur_rerise = shared_lc_model.durations[f][
-                        'rerise'][slice_point['file_indx']]#[mask]
-                
-                    t_second_rise = dur_rise + dur_fade + dur_rerise
+                    t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0]+self.mjd0 + slice_point['peak_time']
+                    t_first_peak = self.lc_model.data[slice_point['file_indx']][f]['ph'][1]+self.mjd0 + slice_point['peak_time']
+                    t_dip = self.lc_model.data[slice_point['file_indx']][f]['ph'][3]+self.mjd0 + slice_point['peak_time']
+                    t_second_peak = self.lc_model.data[slice_point['file_indx']][f]['ph'][5]+self.mjd0 + slice_point['peak_time']
+                    # print(t_start,t_first_peak,t_dip,t_second_peak)
                     
-                    #request 1 3sig observation after second peak
-                    second_rise = np.sum((t_filt > t_second_rise) & (snr_filt >= 3.0))
-                    if second_rise >= 1:
-                        double_peak_detected = True
-                        break
+                    first_times = (t_filt>t_start)*(t_filt<t_first_peak)
+                    if np.sum(first_times)<2:
+                        continue
+                    second_times = (t_filt>t_first_peak)*(t_filt<t_dip)
+                    if np.sum(second_times)<2:
+                        continue
+                    after_dip = (t_filt>t_dip)*(t_filt<t_second_peak)
+                    if np.sum(after_dip)>0:
+                        detected = True
+                        return detected
         
         return detected
     
