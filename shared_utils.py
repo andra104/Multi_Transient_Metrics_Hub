@@ -265,11 +265,29 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
         df_obs = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
         max_index = len(shared_lc_model.data) - 1
         df_obs = df_obs[df_obs['file_indx'] <= max_index]
+
+        #8/19
+        # Store the injected peak magnitude (from slicer slice_points)
+        for f in ['u', 'g', 'r', 'i', 'z', 'y']:
+            keys = {
+                'abs': f'peak_mag_abs_{f}',
+                'noebv': f'peak_app_mag_noebv_{f}',
+                'ebv': f'peak_app_mag_ebv_{f}'
+            }
+            for k, slicer_key in keys.items():
+                if slicer_key in slicer.slice_points:
+                    df_obs[f'injected_peak_{k}_mag_{f}'] = df_obs['sid'].map(lambda sid: slicer.slice_points[slicer_key][sid])
+                else:
+                    print(f"[WARNING] {slicer_key} not found in slice_points — skipping injected_peak_{k}_mag_{f}.")
+        
         df_obs["year"] = (df_obs["peak_time"] / 365.25).astype(int) + 1
         df_detected_per_year = df_obs[df_obs['detected'] == True].groupby("year").size().reset_index(name="n_detected")
 
         for col in ['filter', 'mjd_obs', 'mag_obs', 'snr_obs']:
             df_obs[col] = df_obs[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+            # Extract evaluated peak mag from obs_records
+            df_obs['eval_peak_mag'] = df_obs['sid'].map(lambda sid: np.min(detect_metric.obs_records[sid]['mag_obs']) if 'mag_obs' in detect_metric.obs_records[sid] else np.nan)
+
 
         n_observations_detected = []
         n_filters_detected_per_event = []
@@ -805,6 +823,7 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
                 peak_app_mag_ebv[f].append(m_with_ebv)
     
         # Save to slice_points
+        #8/11 added app mag before, after, ebv and distance modulus
         for f in filters:
             slicer.slice_points[f'peak_mag_abs_{f}'] = np.array(peak_mag_abs[f])
             slicer.slice_points[f'peak_app_mag_noebv_{f}'] = np.array(peak_app_mag_noebv[f])
