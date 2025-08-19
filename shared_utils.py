@@ -592,7 +592,7 @@ def sample_rate_from_volume(rate_density, t_start, t_end,
 # --------------------------------------------
 # Population Loader (used in scripts)
 # --------------------------------------------
-def load_or_generate_population(use_extinction, pop_file, t_start=1, t_end=3652, seed=42,
+def load_or_generate_population(use_extinction, pop_file, lc_model=None, t_start=1, t_end=3652, seed=42,
                                 d_min=None, d_max=None,
                                 z_min=None, z_max=None,
                                 num_lightcurves=1000,
@@ -653,7 +653,7 @@ def load_or_generate_population(use_extinction, pop_file, t_start=1, t_end=3652,
 # --------------------------------------------
 # Population generator
 # --------------------------------------------
-def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
+def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, seed=42,
                          d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, 
                        gal_lat_cut=None, rate_density=None, 
                          load_from=None, save_to=None, make_debug_plots=True):
@@ -771,8 +771,51 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
     slicer.slice_points['galb'] = coords.galactic.b.deg
     # slicer.slice_points['theta_obs'] = theta_obs
     # slicer.slice_points['k_correction'] = k_correction
-    print("gal_lat_cut is none")
     #print(t_start, t_end, n_events)
+
+    if lc_model is not None:
+        filters = ['u', 'g', 'r', 'i', 'z', 'y']
+        ax1 = dust_model.ax1  # extinction coefficients per filter
+    
+        # Initialize per-filter storage
+        peak_mag_abs = {}
+        peak_app_mag_noebv = {}
+        peak_app_mag_ebv = {}
+    
+        for f in filters:
+            peak_mag_abs[f] = []
+            peak_app_mag_noebv[f] = []
+            peak_app_mag_ebv[f] = []
+    
+        distance_modulus_list = []
+    
+        for idx, dist, ebv in zip(file_indx, distances, ebv_vals):
+            dm = 5 * np.log10(dist * 1e6) - 5
+            distance_modulus_list.append(dm)
+    
+            for f in filters:
+                m_abs = np.min(lc_model.data[idx][f]['mag'])  # absolute peak
+                A = ax1[f] * ebv
+    
+                m_noebv = m_abs + dm
+                m_with_ebv = m_noebv + A
+    
+                peak_mag_abs[f].append(m_abs)
+                peak_app_mag_noebv[f].append(m_noebv)
+                peak_app_mag_ebv[f].append(m_with_ebv)
+    
+        # Save to slice_points
+        for f in filters:
+            slicer.slice_points[f'peak_mag_abs_{f}'] = np.array(peak_mag_abs[f])
+            slicer.slice_points[f'peak_app_mag_noebv_{f}'] = np.array(peak_app_mag_noebv[f])
+            slicer.slice_points[f'peak_app_mag_ebv_{f}'] = np.array(peak_app_mag_ebv[f])
+    
+        slicer.slice_points['distance_modulus'] = np.array(distance_modulus_list)
+    else:
+        print("[WARNING] lc_model not provided — skipping injected peak magnitude storage.")
+    
+    print("gal_lat_cut is none")
+
     
     if make_debug_plots==True:  
         plt.hist(peak_times,  bins=50)
@@ -819,7 +862,7 @@ def generate_PopSlicer(use_extinction, t_start=1, t_end=3652, seed=42,
     
     # slicer.slice_points['rise_time_days'] = np.array(rise_times)
     # slicer.slice_points['fade_time_days'] = np.array(fade_times)
-
+    
 
     
     if save_to:
