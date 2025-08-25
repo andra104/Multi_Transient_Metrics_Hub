@@ -123,14 +123,20 @@ class LC:
 # --------------------------------------------
 # Base GRB Metric with extinction and SNR
 # --------------------------------------------
+#8/25 updated new class init and self.diag stuff before if lc_model
 class Base_Metric(BaseMetric):
-    def __init__(self, metricName='BaseGRBAfterglowMetric',
+    def __init__(self, metricName='BaseGRBAfterglowMetric', 
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
-                 filterCol='filter', nightCol='night',
-                 mjd0=60980.5, outputLc=False, badval=-666,
+                 filterCol='filter', nightCol='night', mjd0=60980.5, outputLc=False, badval=-666,
                  filter_include=None,
                  load_from="GRBAfterglow_templates.pkl",
-                 lc_model=None, use_extinction=True, use_kcorrect=True,k_correct_type=None,k_correct_arg=None, # <-- NEW
+                 lc_model=None, use_extinction=True, use_kcorrect=True, k_correct_type=None, k_correct_arg=None,
+                 # NEW: diagnostic sampling controls
+                 diag_store=True,
+                 diag_sample_rate=0.01,       # Bernoulli keep prob for each obs row
+                 diag_per_event_cap=30,       # hard cap per event after sampling
+                 diag_min_snr=None,           # e.g., 3 or 5 to gate by SNR
+                 diag_max_mag=None,           # e.g., 24 to gate by brightness
                  **kwargs):
         """
         Parameters
@@ -138,6 +144,13 @@ class Base_Metric(BaseMetric):
         lc_model : LC or None
             Shared GRB light curve model object. If None, load from file.
         """
+        self.diag_store = diag_store
+        self.diag_sample_rate = float(diag_sample_rate)
+        self.diag_per_event_cap = int(diag_per_event_cap)
+        self.diag_min_snr = None if diag_min_snr is None else float(diag_min_snr)
+        self.diag_max_mag = None if diag_max_mag is None else float(diag_max_mag)
+        self._rng = np.random.default_rng(12345)  # stable, cheap
+        
         if lc_model is not None:
             self.lc_model = lc_model
         else:
@@ -280,6 +293,15 @@ class Detect_Metric(Base_Metric):
         last_det_mjd = np.nan
         #rise_time = np.nan
         fade_time = np.nan
+
+        # 8/25
+        per_filter_min_mag = {}
+        for f in np.unique(obs_record['filter']):
+            fmask = (obs_record['filter'] == f)
+            if np.any(fmask):
+                per_filter_min_mag[f] = float(np.min(obs_record['mag_obs'][fmask]))
+        obs_record['per_filter_min_mag'] = per_filter_min_mag  # small dict
+
     
         if np.any(detected_mask):
             first_det_mjd = obs_record['mjd_obs'][detected_mask].min()

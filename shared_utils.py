@@ -1053,42 +1053,133 @@ def apply_spectral_index(mag_ref, filtername, ref_filter="Rc", beta=-0.75):
 # Evaluate light curve 
 # -------------------------------------------
 
+#organized 8/25
 def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     """
-    Evaluate light curve at the location and time of the slice point.
-    Apply extinction, k-correction, and distance modulus.
-    """
-    # if not np.isscalar(slice_point['peak_time']):
-    #     print("slice_point['file_indx']: ",slice_point['file_indx'])
-    #     print("type peak time: ", type(slice_point['peak_time']))
-    #     raise ValueError(f"Non-scalar peak_time: shape={np.shape(slice_point['peak_time'])}. slice_point['file_indx']: ",slice_point['file_indx'])
+    Evaluate the model light curve for an event at observed times and filters. 
+    Interpolates the template LC, applies distance modulus, extinction, and optional 
+    k-corrections to yield apparent magnitudes and SNRs. If diagnostic sampling is 
+    enabled (via diag_*), a small subsample of per-visit mags/SNRs/MJDs/filters is 
+    stored for QA without large memory overhead.
 
-    t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time'] 
-    mags = np.zeros(t.size)
+    Parameters
+    ----------
+    dataSlice : np.ndarray
+        Subset of the simulated survey database containing observation times, filters, 
+        and depth information for this sky location.
+    slice_point : dict
+        Metadata for the injected transient (e.g., distance, extinction, template index).
+    return_full_obs : bool, default=True
+        If True, return a dictionary of per-visit quantities (magnitudes, SNRs, filters, MJDs).
+        If False, return only arrays of SNR, filters, and relative times.
     
-    for f in np.unique(dataSlice[self.filterCol]):
-        infilt = np.where(dataSlice[self.filterCol] == f)
-        mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
-        
-        if self.use_kcorrect:
-            # print("Applying k-correction")
-            z = z_at_value(cosmo.comoving_distance, slice_point['distance'] * u.Mpc)
-            k_correction = apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
-            mags[infilt] = mags[infilt] + k_correction
+    Returns
+    -------
+    snr : np.ndarray
+        Signal-to-noise ratios for each observation.
+    filters : np.ndarray
+        Filters corresponding to each observation.
+    times : np.ndarray
+        Relative times (days since transient peak) for each observation.
+    obs_record : dict or None
+        Per-visit quantities for this event, including:
+            - 'mjd_obs': observation MJDs
+            - 'mag_obs': apparent magnitudes (after DM, EBV, k-correction if enabled)
+            - 'snr_obs': per-visit signal-to-noise ratios
+            - 'filter' : filter codes for each observation
+          If diagnostic sampling is active, may also include:
+            - 'diag_sample_mjd', 'diag_sample_mag', 'diag_sample_snr', 'diag_sample_filter'
+              (subsampled visits retained for QA)
+        Returns None if return_full_obs=False.
+    """
+    # Phase relative to peak (days)
+    t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
 
-            
+    # Allocate magnitude array (apparent mags)
+    mags = np.zeros(t.size)
+
+    # Cache
+    filters = dataSlice[self.filterCol]
+    m5 = dataSlice[self.m5Col]
+    dm = 5 * np.log10(slice_point['distance'] * 1e6) - 5  # distance modulus
+
+    # Precompute redshift once per event if using k-corrections
+    if self.use_kcorrect:
+        z = z_at_value(cosmo.comoving_distance, slice_point['distance'] * u.Mpc)
+
+    # Per-filter evaluation at observed epochs
+    for f in np.unique(filters):
+        infilt = np.where(filters == f)[0]
+
+        # template → observed times
+        mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
+
+        # K-correction (if enabled)
+        if self.use_kcorrect:
+            k_correction = apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
+            mags[infilt] += k_correction
+
+        # Galactic extinction (if enabled)
         if self.use_extinction:
             mags[infilt] += self.ax1[f] * slice_point['ebv']
             if not self.extinction_printed:
                 print("EBV included")
                 self.extinction_printed = True
-        #mags[infilt] += self.ax1[f] * slice_point['ebv']
-        
-        mags[infilt] += 5 * np.log10(slice_point['distance'] * 1e6) - 5
 
-    snr = m52snr(mags, dataSlice[self.m5Col])
-    filters = dataSlice[self.filterCol]
+        # Distance modulus
+        mags[infilt] += dm
+
+    # LSST single-visit SNR at each observation
+    snr = m52snr(mags, m5)
     times = t
+
+    if not return_full_obs:
+        return snr, filters, times, None
+
+    # Build obs_record
+    obs_record = {
+        'mjd_obs': dataSlice[self.mjdCol],
+        'mag_obs': mags,
+        'snr_obs': snr,
+        'filter': filters
+    }
+
+    # --- Lightweight diagnostic sampling of per-visit mags (optional) ---
+    if getattr(self, 'diag_store', False):
+        # Ensure an RNG exists
+        if not hasattr(self, '_rng') or self._rng is None:
+            self._rng = np.random.default_rng(12345)
+
+        keep_mask = np.ones_like(snr, dtype=bool)
+
+        # Gating (optional)
+        if getattr(self, 'diag_min_snr', None) is not None:
+            keep_mask &= (snr >= self.diag_min_snr)
+        if getattr(self, 'diag_max_mag', None) is not None:
+            keep_mask &= (mags <= self.diag_max_mag)
+
+        # Bernoulli thinning
+        p = float(np.clip(getattr(self, 'diag_sample_rate', 0.0), 0.0, 1.0))
+        if p > 0.0:
+            rnd = self._rng.random(size=keep_mask.size)
+            keep_mask &= (rnd < p)
+
+        idx = np.where(keep_mask)[0]
+
+        # Per-event hard cap
+        cap = int(getattr(self, 'diag_per_event_cap', 0))
+        if cap > 0 and idx.size > cap:
+            idx = self._rng.choice(idx, size=cap, replace=False)
+
+        # Attach samples (empty lists if none)
+        obs_record['diag_sample_mjd']    = dataSlice[self.mjdCol][idx].tolist() if idx.size else []
+        obs_record['diag_sample_mag']    = mags[idx].tolist() if idx.size else []
+        obs_record['diag_sample_snr']    = snr[idx].tolist() if idx.size else []
+        obs_record['diag_sample_filter'] = filters[idx].tolist() if idx.size else []
+    # --------------------------------------------------------------------
+
+    return snr, filters, times, obs_record
+    
 
     if return_full_obs:
         obs_record = {
@@ -1249,3 +1340,224 @@ def apply_kcorrection(z, obs_filter, spectrum_type, k_correct_arg):
     
     else:
         raise ValueError(f"Unknown spectrum_type: {spectrum_type}")
+
+#8/25
+def backfill_injected_peaks_if_missing(slicer, lc_model, use_extinction=True):
+    """
+    Ensure slicer.slice_points contains:
+      - peak_mag_abs_{f}
+      - peak_app_mag_noebv_{f}
+      - peak_app_mag_ebv_{f}
+      - distance_modulus
+    for f in ugrizy. Computes and inserts them if absent.
+    """
+    filters = ['u','g','r','i','z','y']
+    need_backfill = any(
+        f'peak_mag_abs_{f}' not in slicer.slice_points or
+        f'peak_app_mag_noebv_{f}' not in slicer.slice_points or
+        f'peak_app_mag_ebv_{f}' not in slicer.slice_points
+        for f in filters
+    )
+
+    if not need_backfill and 'distance_modulus' in slicer.slice_points:
+        return slicer  # nothing to do
+
+    if lc_model is None:
+        raise ValueError("lc_model is required to backfill injected peaks.")
+
+    # Gather event-level quantities
+    file_indx = np.asarray(slicer.slice_points['file_indx'])
+    dist = np.asarray(slicer.slice_points['distance'])  # Mpc
+    ebv = np.asarray(slicer.slice_points.get('ebv', np.zeros_like(dist)))
+
+    dm = 5 * np.log10(dist * 1e6) - 5
+    slicer.slice_points['distance_modulus'] = dm
+
+    ax1 = dust_model.ax1  # extinction coefficients
+
+    # Build arrays per filter
+    for f in filters:
+        # absolute template peak in this filter from lc_model
+        m_abs = np.array([np.min(lc_model.data[idx][f]['mag']) for idx in file_indx])
+
+        slicer.slice_points[f'peak_mag_abs_{f}'] = m_abs
+        m_noebv = m_abs + dm
+        slicer.slice_points[f'peak_app_mag_noebv_{f}'] = m_noebv
+
+        if use_extinction:
+            A = ax1[f] * ebv
+        else:
+            A = 0.0
+        slicer.slice_points[f'peak_app_mag_ebv_{f}'] = m_noebv + A
+
+    return slicer
+    
+#8/25
+def plot_population_lcs(pop_file,
+                        lc_model=None,
+                        templates_file=None,
+                        sids=None,
+                        num=3,
+                        days_before=0.01,
+                        days_after=10.0,
+                        n_time=200,
+                        filters=('u','g','r','i','z','y'),
+                        use_extinction=True,
+                        use_kcorrect=True,
+                        k_correct_type=None,
+                        k_correct_arg=None,
+                        use_log_time=True,
+                        overlap=False,
+                        ylim=None,
+                        fast_peaks=False):
+    """
+    Plot apparent (not absolute) light curves for a few events from a saved population.
+
+    If fast_peaks=True and the population slice_points contain 'peak_app_mag_ebv_{f}',
+    plot per-filter PEAK points at t=0 using those stored values (and add k-correction
+    if enabled), avoiding template interpolation for a quick diagnostic view.
+
+    Otherwise, reconstruct apparent light curves via the template library with DM, EBV,
+    and optional k-correction.
+
+    Parameters are as before; see earlier docstring. New flag:
+    fast_peaks : bool
+        If True and peak columns exist, plot only peak magnitudes at t=0 for speed.
+    """
+    # Load population slice_points
+    if not os.path.exists(pop_file):
+        raise FileNotFoundError(f"pop_file not found: {pop_file}")
+    with open(pop_file, 'rb') as f:
+        slice_points = pickle.load(f)
+
+    # Decide which events to plot
+    n_events = len(slice_points['file_indx'])
+    all_sids = np.arange(n_events)
+    if sids is None:
+        sids = all_sids[:min(num, n_events)]
+    else:
+        sids = np.array(sids, dtype=int)
+
+    # Plot styling
+    colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
+    ax1 = dust_model.ax1  # extinction coefficients (used only in full mode)
+
+    # Quick check: do we have stored peaks?
+    have_peaks = all(f'peak_app_mag_ebv_{f}' in slice_points for f in filters)
+
+    # -------------------------
+    # FAST PEAKS-ONLY MODE
+    # -------------------------
+    if fast_peaks and have_peaks:
+        for sid in sids:
+            dist_mpc = float(slice_points['distance'][sid])
+            ebv = float(slice_points.get('ebv', 0.0))
+            file_indx = slice_points['file_indx'][sid]
+
+            # Compute z for k-correction if requested
+            if use_kcorrect:
+                z = z_at_value(cosmo.comoving_distance, dist_mpc * u.Mpc)
+
+            if not overlap:
+                plt.figure()
+
+            # Plot peak points at t=0 (x=0 or log10(1e-5) if log scale)
+            x0 = np.log10(1e-5) if use_log_time else 0.0
+
+            for f in filters:
+                # Stored apparent peak already includes DM + EBV
+                m_peak = float(slice_points[f'peak_app_mag_ebv_{f}'][sid])
+
+                # Add K-correction if enabled (stored peaks do NOT include K)
+                if use_kcorrect:
+                    m_peak += apply_kcorrection(z, f, k_correct_type, k_correct_arg)
+
+                # Plot as a point at t=0
+                plt.scatter([x0], [m_peak], label=f if sid == sids[0] else None,
+                            c=colors.get(f, 'gray'), s=40, alpha=0.8)
+
+            title = (f"Population PEAKS (apparent) — SID {sid} | idx={file_indx} | "
+                     f"d={dist_mpc:.0f} Mpc | E(B−V)={ebv:.03f}")
+            plt.title(title, fontsize=12)
+            plt.xlabel("log10(days since peak)" if use_log_time else "Days since peak", fontsize=11)
+            plt.ylabel("Apparent mag", fontsize=11)
+            plt.gca().invert_yaxis()
+            if ylim is not None:
+                plt.ylim(ylim)
+            if not overlap:
+                plt.legend(title="filter", ncol=6, fontsize=9)
+                plt.grid(True, alpha=0.3)
+                plt.tight_layout()
+                plt.show()
+
+        if overlap:
+            plt.legend(title="filter", ncol=6, fontsize=9)
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.show()
+        return  # done with fast path
+
+    # -------------------------
+    # FULL RECONSTRUCTION MODE
+    # -------------------------
+    # Ensure lc_model (or load from templates_file)
+    if lc_model is None:
+        if templates_file is None:
+            raise ValueError("Provide lc_model or templates_file.")
+        from local_GRBafterglows_metric import LC
+        lc_model = LC(load_from=templates_file)
+
+    # Relative time grid
+    t_rel = np.linspace(-days_before, days_after, n_time)
+    t_plot = np.log10(t_rel + 1e-5) if use_log_time else t_rel
+
+    for sid in sids:
+        file_indx = slice_points['file_indx'][sid]
+        dist_mpc  = float(slice_points['distance'][sid])
+        ebv       = float(slice_points.get('ebv', 0.0))
+
+        # Distance modulus
+        dm = 5 * np.log10(dist_mpc * 1e6) - 5
+
+        # Redshift once per event if needed
+        if use_kcorrect:
+            z = z_at_value(cosmo.comoving_distance, dist_mpc * u.Mpc)
+
+        if not overlap:
+            plt.figure()
+
+        for f in filters:
+            m_abs = lc_model.interp(t_rel, f, file_indx)
+
+            if use_kcorrect:
+                kcorr = apply_kcorrection(z, f, k_correct_type, k_correct_arg)
+            else:
+                kcorr = 0.0
+
+            A_f = ax1[f] * ebv if use_extinction else 0.0
+            m_app = m_abs + kcorr + A_f + dm
+
+            plt.plot(t_plot, m_app, color=colors.get(f, 'gray'),
+                     label=f if sid == sids[0] else None, alpha=0.6)
+
+        title = (f"Population LC (apparent): SID {sid} | idx={file_indx} | "
+                 f"d={dist_mpc:.0f} Mpc | E(B−V)={ebv:.03f}")
+        plt.title(title, fontsize=12)
+        plt.xlabel("log10(days since peak)" if use_log_time else "Days since peak", fontsize=11)
+        plt.ylabel("Apparent mag", fontsize=11)
+        plt.gca().invert_yaxis()
+        if ylim is not None:
+            plt.ylim(ylim)
+        if not overlap:
+            plt.legend(title="filter", ncol=6, fontsize=9)
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.show()
+
+    if overlap:
+        plt.legend(title="filter", ncol=6, fontsize=9)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+
