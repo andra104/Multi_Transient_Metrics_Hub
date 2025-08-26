@@ -21,6 +21,8 @@ from astropy.coordinates import SkyCoord
 from dustmaps.sfd import SFDQuery
 from pathlib import Path
 from rubin_sim.maf.utils import m52snr
+import tempfile
+
 
 
 
@@ -610,6 +612,8 @@ def sample_rate_from_volume(rate_density, t_start, t_end,
 # --------------------------------------------
 # Population Loader (used in scripts)
 # --------------------------------------------
+#8/26 updated for atomic saving 
+
 def load_or_generate_population(use_extinction, pop_file, lc_model=None, t_start=1, t_end=3652, seed=42,
                                 d_min=None, d_max=None,
                                 z_min=None, z_max=None,
@@ -650,34 +654,41 @@ def load_or_generate_population(use_extinction, pop_file, lc_model=None, t_start
     """
     if generate_new or not os.path.exists(pop_file):
         print(f"[INFO] Generating population and saving to {pop_file}")
-        slicer = generate_PopSlicer(use_extinction=use_extinction, 
+        slicer = generate_PopSlicer(use_extinction=use_extinction,
+                                    lc_model=lc_model,
                                     t_start=t_start, t_end=t_end,
-                                    d_min=d_min, d_max=d_max,
-                                    z_min = z_min, z_max = z_max,
-                                    seed=seed,
-                                    num_lightcurves=num_lightcurves,
-                                    gal_lat_cut=gal_lat_cut,
-                                    rate_density=rate_density,
-                                    save_to=pop_file,
+                                    d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max,
+                                    seed=seed, num_lightcurves=num_lightcurves,
+                                    gal_lat_cut=gal_lat_cut, rate_density=rate_density,
+                                    save_to=pop_file,               # ensure atomic save on generate
                                     make_debug_plots=make_debug_plots)
     else:
         print(f"[INFO] Loading population from {pop_file}")
         slicer = generate_PopSlicer(use_extinction=use_extinction,
-                                    load_from=pop_file)
-
+                                    lc_model=lc_model,               # <-- CRITICAL
+                                    load_from=pop_file,
+                                    save_to=pop_file,                # re-save atomically if backfilled
+                                    make_debug_plots=False)
     return slicer
 
     
 # --------------------------------------------
 # Population generator
 # --------------------------------------------
+
+#8/26 cleaned up this function from old material, added atomic saving unit
+
 def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, seed=42,
                          d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, 
                        gal_lat_cut=None, rate_density=None, 
                          load_from=None, save_to=None, make_debug_plots=True):
     """
-    Generate a population of  afterglows with realistic extinction and sky distribution.
-
+    Generate or load a population of events. When loading:
+      - if peak columns are missing and lc_model is provided, they are backfilled.
+      - if 'save_to' is set and any backfill occurred, the upgraded file is saved atomically.
+    When generating new:
+      - population is written with an atomic pickle if 'save_to' is provided.
+      
     Parameters
     ----------
     use_extinction: whether to use extinction (Bool)
@@ -690,47 +701,64 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
     make_debug_plots : True or anything else
         if true, will plot various distributions and print some stuff
     """
+    # -------- LOAD PATH --------
+
     if load_from and os.path.exists(load_from):
-        with open(load_from, 'rb') as f:
-            slice_data = pickle.load(f)
-        slicer = UserPointsSlicer(ra=slice_data['ra'], dec=slice_data['dec'], badval=0)
-        slicer.slice_points.update(slice_data)
-        print(f"Loaded population from {load_from}")
-        return slicer
+        # [NEW] robust load + auto-backfill + optional atomic re-save
+        try:
+            with open(load_from, 'rb') as f:
+                slice_data = pickle.load(f)
+        except Exception as e:
+            print(f"[WARN] Failed to load {load_from} ({e}). Regenerating population instead.")
+        else:
+            slicer = UserPointsSlicer(ra=slice_data['ra'], dec=slice_data['dec'], badval=0)
+            slicer.slice_points.update(slice_data)
+            print(f"Loaded population from {load_from}")
+
+            backfilled = False
+            try:
+                before = set(slicer.slice_points.keys())
+                # auto-backfill only if lc_model is provided
+                if lc_model is not None:
+                    slicer = backfill_injected_peaks_if_missing(
+                        slicer, lc_model=lc_model, use_extinction=use_extinction
+                    )
+                after = set(slicer.slice_points.keys())
+                backfilled = (after != before)
+            except Exception as bf_e:
+                print(f"[WARN] Backfill skipped/failed ({bf_e}).")
+
+            # Persist upgraded file if requested
+            if backfilled and save_to:
+                atomic_save_pickle(dict(slicer.slice_points), save_to)
+
+            return slicer
+    # -------- END LOAD PATH --------
 
     rng = np.random.default_rng(seed)
     d_min, d_max = get_distance_bounds(d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max)
-    n_events = sample_rate_from_volume(t_start=t_start, t_end=t_end, d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max, rate_density=rate_density)
+    n_events = sample_rate_from_volume(t_start=t_start, t_end=t_end, d_min=d_min, d_max=d_max, 
+                                       z_min=z_min, z_max=z_max, rate_density=rate_density)
     print(f"Simulated {n_events} events using rate_density = {rate_density:.1e}")
 
-    
-    #ra, dec = uniform_sphere_degrees(n_events, seed=seed) #returns degrees
     nside = 64  # Or 128 if you want higher resolution
     ra, dec = inject_uniform_healpix(nside=nside, n_events=n_events, seed=seed)
 
-    #print(f"[CHECK] Dec range: {dec.min():.2f} to {dec.max():.2f} (expected ~[-90, 90])")
-
     dec = np.clip(dec, -89.9999, 89.9999)
-    #dec_rad = np.radians(dec)
-    # coords = SkyCoord(ra=np.degrees(slicer.slice_points['ra']) * u.deg, dec=np.degrees(slicer.slice_points['dec']) * u.deg, frame='icrs') #this line correctly converts them and labels them
-    coords = SkyCoord(ra * u.deg, dec * u.deg, frame='icrs') #this line correctly converts them and labels them
+    coords = SkyCoord(ra * u.deg, dec * u.deg, frame='icrs')
 
     print("Len ra before masking: ", len(ra))
     if gal_lat_cut is not None:
         b = coords.galactic.b.deg
         print("b: ", b)
-        mask = np.abs(b) < gal_lat_cut #shar switched this to less
-        print("len mask, num true in mask: ", len(mask),np.sum(mask))
+        mask = np.abs(b) < gal_lat_cut  # shar switched this to less
+        print("len mask, num true in mask: ", len(mask), np.sum(mask))
         ra, dec = ra[mask], dec[mask]
         coords = coords[mask]
         print("len ra after masking: ", len(ra))
     
     n_events = len(ra)
-    slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0) #returns radians 
-    #print(f"Print 10 = {ra[:10],dec[:10]}")
-    #print(f" Value = {slicer.slice_points}")
-    #slicer.slice_points['ra'] = ra
-    #slicer.slice_points['dec'] = dec_rad  # Correct assignment
+    slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)  # returns radians 
     if make_debug_plots==True:
         plt.hist(slicer.slice_points['ra'], bins=50)
         plt.xlabel("RA [rad]")
@@ -744,52 +772,23 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
         plt.grid(True)
         plt.show()
 
-    # theta_obs = rng.uniform(0, np.pi/2, n_events)  # radians, or degrees if you prefer
     distances = rng.uniform(d_min, d_max, n_events)
     peak_times = rng.uniform(t_start, t_end, n_events)
-    print("initial peak times: ",peak_times)
+    print("initial peak times: ", peak_times)
     file_indx = rng.integers(0, num_lightcurves, len(ra))
-    
-
 
     sfd = SFDQuery()
     if use_extinction:
         ebv_vals = sfd(coords)
     else:
         ebv_vals = np.zeros(len(distances))
-    
 
-    # if gal_lat_cut is not None:
-    #     b = coords.galactic.b.deg
-    #     print("b: ", b)
-    #     mask = np.abs(b) < gal_lat_cut #shar switched this to less
-    #     print("len mask, num true in mask: ", len(mask),np.sum(mask))
-    #     ra, dec = ra[mask], dec[mask]
-        
-    #     distances = distances[mask]
-    #     peak_times = peak_times[mask]
-    #     print("len peak times after masking: ", len(peak_times))
-    #     file_indx = file_indx[mask]
-    #     ebv_vals = ebv_vals[mask]
-    #     coords = coords[mask]
-    #     print("gal_lat_cut is not None")
-    #     slicer.slice_points['distance'] = distances
-    #     slicer.slice_points['peak_time'] = peak_times
-    #     slicer.slice_points['file_indx'] = file_indx
-    #     slicer.slice_points['ebv'] = ebv_vals
-    #     slicer.slice_points['gall'] = coords.galactic.l.deg
-    #     slicer.slice_points['galb'] = coords.galactic.b.deg
-    #     slicer.slice_points['theta_obs'] = theta_obs
-    # else:
     slicer.slice_points['distance'] = distances
     slicer.slice_points['peak_time'] = peak_times
     slicer.slice_points['file_indx'] = file_indx
     slicer.slice_points['ebv'] = ebv_vals
     slicer.slice_points['gall'] = coords.galactic.l.deg
     slicer.slice_points['galb'] = coords.galactic.b.deg
-    # slicer.slice_points['theta_obs'] = theta_obs
-    # slicer.slice_points['k_correction'] = k_correction
-    #print(t_start, t_end, n_events)
 
     if lc_model is not None:
         filters = ['u', 'g', 'r', 'i', 'z', 'y']
@@ -823,7 +822,6 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
                 peak_app_mag_ebv[f].append(m_with_ebv)
     
         # Save to slice_points
-        #8/11 added app mag before, after, ebv and distance modulus
         for f in filters:
             slicer.slice_points[f'peak_mag_abs_{f}'] = np.array(peak_mag_abs[f])
             slicer.slice_points[f'peak_app_mag_noebv_{f}'] = np.array(peak_app_mag_noebv[f])
@@ -831,11 +829,10 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
     
         slicer.slice_points['distance_modulus'] = np.array(distance_modulus_list)
     else:
-        print("[WARNING] lc_model not provided — skipping injected peak magnitude storage.")
+        print("[WARNING] lc_model not provided - skipping injected peak magnitude storage.")
     
     print("gal_lat_cut is none")
 
-    
     if make_debug_plots==True:  
         plt.hist(peak_times,  bins=50)
         plt.xlabel("peak time")
@@ -848,7 +845,6 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
         plt.title("Distance Distribution")
         plt.grid(True)
         plt.show()
-
 
     if make_debug_plots==True:     
         print(f"[DEBUG] coords.dec[:5]: {coords.dec[:5]}")
@@ -865,33 +861,13 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
         plt.title("SkyCoord Dec Distribution")
         plt.grid(True)
         plt.show()
-
-    #slicer = UserPointsSlicer(ra=ra, dec=dec, badval=0)
-    #slicer.slice_points['ra'] = ra
-    #slicer.slice_points['dec'] = dec
-
-    #shar commenting this out because there is no self here
-    
-    # Assuming all filters have same rise/fade for given event
-    # rise_times = []
-    # fade_times = []
-    # for idx in file_indx:
-    #     rise_times.append(self.lc_model.data[idx]['g']['rise_time_days'])
-    #     fade_times.append(self.lc_model.data[idx]['g']['fade_time_days'])
-    
-    # slicer.slice_points['rise_time_days'] = np.array(rise_times)
-    # slicer.slice_points['fade_time_days'] = np.array(fade_times)
-    
-
     
     if save_to:
-        with open(save_to, 'wb') as f:
-            pickle.dump(dict(slicer.slice_points), f)
-        print(f"Saved population to {save_to}")
+        # [NEW] atomic save instead of raw pickle.dump
+        atomic_save_pickle(dict(slicer.slice_points), save_to)
 
     print(f"DEBUG: type(peak_times) = {type(peak_times)}")
     print(f"DEBUG: shape(peak_times) = {peak_times.shape}")
-
 
     return slicer
 
@@ -1424,55 +1400,52 @@ def plot_population_lcs(pop_file,
     fast_peaks : bool
         If True and peak columns exist, plot only peak magnitudes at t=0 for speed.
     """
-    # Load population slice_points
+    import numpy as _np  # local, shadow-proof
+
+    # coerce pop_file to a plain string if it came in as a 0-d array / scalar box
+    if not isinstance(pop_file, (str, os.PathLike)):
+        try:
+            pop_file = _np.asarray(pop_file).item()
+        except Exception:
+            raise TypeError(f"pop_file must be a path-like string; got {type(pop_file)}: {pop_file!r}")
+
     if not os.path.exists(pop_file):
         raise FileNotFoundError(f"pop_file not found: {pop_file}")
+
     with open(pop_file, 'rb') as f:
         slice_points = pickle.load(f)
 
-    # Decide which events to plot
+    # choose SIDs
     n_events = len(slice_points['file_indx'])
-    all_sids = np.arange(n_events)
+    all_sids = _np.arange(n_events)
     if sids is None:
         sids = all_sids[:min(num, n_events)]
     else:
-        sids = np.array(sids, dtype=int)
+        sids = _np.array(sids, dtype=int)
 
-    # Plot styling
     colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
-    ax1 = dust_model.ax1  # extinction coefficients (used only in full mode)
+    ax1 = dust_model.ax1
 
-    # Quick check: do we have stored peaks?
     have_peaks = all(f'peak_app_mag_ebv_{f}' in slice_points for f in filters)
 
-    # -------------------------
-    # FAST PEAKS-ONLY MODE
-    # -------------------------
+    # -------- FAST PEAKS-ONLY --------
     if fast_peaks and have_peaks:
         for sid in sids:
-            dist_mpc = float(slice_points['distance'][sid])
-            ebv = float(slice_points.get('ebv', 0.0))
-            file_indx = slice_points['file_indx'][sid]
+            dist_mpc  = _np.asarray(slice_points['distance']).ravel()[sid].item()
+            ebv_arr   = _np.asarray(slice_points.get('ebv', 0.0))
+            ebv       = (ebv_arr if _np.isscalar(ebv_arr) else ebv_arr.ravel()[sid].item()) if not _np.isscalar(ebv_arr) else float(ebv_arr)
+            file_indx = int(_np.asarray(slice_points['file_indx']).ravel()[sid].item())
 
-            # Compute z for k-correction if requested
-            if use_kcorrect:
-                z = z_at_value(cosmo.comoving_distance, dist_mpc * u.Mpc)
+            z = z_at_value(cosmo.comoving_distance, dist_mpc * u.Mpc) if use_kcorrect else None
 
             if not overlap:
                 plt.figure()
 
-            # Plot peak points at t=0 (x=0 or log10(1e-5) if log scale)
-            x0 = np.log10(1e-5) if use_log_time else 0.0
-
+            x0 = _np.log10(1e-5) if use_log_time else 0.0
             for f in filters:
-                # Stored apparent peak already includes DM + EBV
-                m_peak = float(slice_points[f'peak_app_mag_ebv_{f}'][sid])
-
-                # Add K-correction if enabled (stored peaks do NOT include K)
+                m_peak = _np.asarray(slice_points[f'peak_app_mag_ebv_{f}']).ravel()[sid].item()
                 if use_kcorrect:
                     m_peak += apply_kcorrection(z, f, k_correct_type, k_correct_arg)
-
-                # Plot as a point at t=0
                 plt.scatter([x0], [m_peak], label=f if sid == sids[0] else None,
                             c=colors.get(f, 'gray'), s=40, alpha=0.8)
 
@@ -1495,46 +1468,41 @@ def plot_population_lcs(pop_file,
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             plt.show()
-        return  # done with fast path
+        return
 
-    # -------------------------
-    # FULL RECONSTRUCTION MODE
-    # -------------------------
-    # Ensure lc_model (or load from templates_file)
+    # -------- FULL LC RECONSTRUCTION --------
     if lc_model is None:
         if templates_file is None:
             raise ValueError("Provide lc_model or templates_file.")
         from local_GRBafterglows_metric import LC
         lc_model = LC(load_from=templates_file)
 
-    # Relative time grid
-    t_rel = np.linspace(-days_before, days_after, n_time)
-    t_plot = np.log10(t_rel + 1e-5) if use_log_time else t_rel
+    # time grid (avoid log of negatives by clipping to ≥1e-5 for plotting)
+    t_rel  = _np.linspace(-days_before, days_after, n_time)
+    t_plot = _np.log10(_np.maximum(t_rel, 1e-5)) if use_log_time else t_rel
+
+    # Optional: avoid evaluating before template start (prevents 99-mag padding)
+    t0 = getattr(lc_model, "t_grid", _np.array([0.0]))[0]
+    t_eval = _np.maximum(t_rel, t0)
 
     for sid in sids:
-        file_indx = slice_points['file_indx'][sid]
-        dist_mpc  = float(slice_points['distance'][sid])
-        ebv       = float(slice_points.get('ebv', 0.0))
+        file_indx = int(_np.asarray(slice_points['file_indx']).ravel()[sid].item())
+        dist_mpc  = float(_np.asarray(slice_points['distance']).ravel()[sid].item())
+        ebv_arr   = _np.asarray(slice_points.get('ebv', 0.0))
+        ebv       = (ebv_arr if _np.isscalar(ebv_arr) else ebv_arr.ravel()[sid].item()) if not _np.isscalar(ebv_arr) else float(ebv_arr)
 
-        # Distance modulus
-        dm = 5 * np.log10(dist_mpc * 1e6) - 5
-
-        # Redshift once per event if needed
-        if use_kcorrect:
-            z = z_at_value(cosmo.comoving_distance, dist_mpc * u.Mpc)
+        dm = 5 * _np.log10(dist_mpc * 1e6) - 5
+        z  = z_at_value(cosmo.comoving_distance, dist_mpc * u.Mpc) if use_kcorrect else None
 
         if not overlap:
             plt.figure()
 
         for f in filters:
-            m_abs = lc_model.interp(t_rel, f, file_indx)
-
-            if use_kcorrect:
-                kcorr = apply_kcorrection(z, f, k_correct_type, k_correct_arg)
-            else:
-                kcorr = 0.0
-
-            A_f = ax1[f] * ebv if use_extinction else 0.0
+            m_abs = lc_model.interp(t_eval, f, file_indx)
+            # pad out pre-peak times with NaN
+            m_abs = _np.where(t_rel < t0, _np.nan, m_abs)
+            kcorr = apply_kcorrection(z, f, k_correct_type, k_correct_arg) if use_kcorrect else 0.0
+            A_f   = ax1[f] * ebv if use_extinction else 0.0
             m_app = m_abs + kcorr + A_f + dm
 
             plt.plot(t_plot, m_app, color=colors.get(f, 'gray'),
@@ -1560,4 +1528,22 @@ def plot_population_lcs(pop_file,
         plt.tight_layout()
         plt.show()
 
+#8/26
+
+def atomic_save_pickle(obj, path):
+    """Atomically save a pickle to avoid partial writes or EOFErrors."""
+    dir_ = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=dir_)
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as f:
+            pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, path)  # atomic on POSIX
+        print(f"[INFO] Saved atomically to {path}")
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
 
