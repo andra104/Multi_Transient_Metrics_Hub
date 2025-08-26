@@ -55,3 +55,13 @@ resultsDb_sqlite.db
 *.h5
 *.npz
 resultsDb_sqlite.db
+
+*.npz
+*.pkl
+*.npy
+*.fits
+
+# Pipeline outputs actually used in this repo
+**/ShockCooling_output/**
+**/GRBafterglows_output/**
+**/Metric_temp*/**
