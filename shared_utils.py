@@ -1104,10 +1104,18 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
 
         # Distance modulus
         mags[infilt] += dm
+        
+    #8/27
+    # # LSST single-visit SNR at each observation
+    # snr = m52snr(mags, m5)
+    # times = t
 
-    # LSST single-visit SNR at each observation
-    snr = m52snr(mags, m5)
+    # LSST single-visit SNR at each observation (NaN-aware)
+    finite = np.isfinite(mags)
+    snr = np.zeros_like(mags, dtype=float)
+    snr[finite] = m52snr(mags[finite], m5[finite])
     times = t
+
 
     if not return_full_obs:
         return snr, filters, times, None
@@ -1387,19 +1395,35 @@ def plot_population_lcs(pop_file,
                         ylim=None,
                         fast_peaks=False):
     """
-    Plot apparent (not absolute) light curves for a few events from a saved population.
-
-    If fast_peaks=True and the population slice_points contain 'peak_app_mag_ebv_{f}',
-    plot per-filter PEAK points at t=0 using those stored values (and add k-correction
-    if enabled), avoiding template interpolation for a quick diagnostic view.
-
-    Otherwise, reconstruct apparent light curves via the template library with DM, EBV,
-    and optional k-correction.
-
-    Parameters are as before; see earlier docstring. New flag:
-    fast_peaks : bool
-        If True and peak columns exist, plot only peak magnitudes at t=0 for speed.
+    Quick-look plotting of *apparent* (distance + extinction + optional K-corr) light curves 
+    for a subset of population events saved in a pickle. Supports:
+      • Fast Peaks mode: scatter stored peak mags at t≈0.
+      • Full Reconstruction: rebuild curves from templates with DM/EBV/K applied.
+    
+    What It Does *Not* Do
+    ---------------------
+    - Does not regenerate templates or populations.
+    - Does not run metrics, SNRs, or survey DB queries.
+    - Does not modify or save population files (read-only).
+    
+    Inputs and Dependencies
+    -----------------------
+    - pop_file (str): pickle from `generate_PopSlicer(...)` containing slice_points.
+    - lc_model or templates_file: required if `fast_peaks=False` to interpolate full LCs.
+    - slice_points fields needed:
+        distance, peak_time, file_indx, ebv
+        (and peak_app_mag_* if using fast_peaks).
+    - External helpers:
+        • `DustValues().ax1` → extinction coefficients
+        • `apply_kcorrection(...)` → optional K(z,f)
+    
+    Key Notes
+    ---------
+    - x-axis can be linear or log-time (log recommended for template fidelity).
+    - y-axis inverted (mags: brighter up).
+    - Safe for quick diagnostics; science calculations still come from metrics/evaluate().
     """
+    
     import numpy as _np  # local, shadow-proof
 
     # coerce pop_file to a plain string if it came in as a 0-d array / scalar box
@@ -1478,7 +1502,13 @@ def plot_population_lcs(pop_file,
         lc_model = LC(load_from=templates_file)
 
     # time grid (avoid log of negatives by clipping to ≥1e-5 for plotting)
-    t_rel  = _np.linspace(-days_before, days_after, n_time)
+    if days_before is None or days_after is None:
+        # Use the template’s own grid span
+        t_rel = lc_model.data[file_indx][f]['ph']
+    else:
+        # Use a uniform grid based on days_before/after
+        t_rel = np.linspace(-days_before, days_after, n_time)
+
     t_plot = _np.log10(_np.maximum(t_rel, 1e-5)) if use_log_time else t_rel
 
     # Optional: avoid evaluating before template start (prevents 99-mag padding)

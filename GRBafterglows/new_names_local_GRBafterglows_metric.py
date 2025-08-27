@@ -107,15 +107,35 @@ class LC:
                 mag_filt = apply_spectral_index(mag_rc, f, ref_filter="Rc", beta=-0.75)
                 lc[f] = {"ph": t_vals, "mag": mag_filt}
             self.data.append(lc)
-
+    #8/27
+    # def interp(self, t, filtername, lc_indx=0):
+    #     return np.interp( #interpolate 
+    #         t,
+    #         self.data[lc_indx][filtername]["ph"],
+    #         self.data[lc_indx][filtername]["mag"],
+    #         left=99, right=99,
+    #     )
+    
     def interp(self, t, filtername, lc_indx=0):
-        return np.interp( #interpolate 
-            t,
-            self.data[lc_indx][filtername]["ph"],
-            self.data[lc_indx][filtername]["mag"],
-            left=99, right=99,
-        )
-        
+        import numpy as np
+    
+        ph  = np.asarray(self.data[lc_indx][filtername]["ph"],  dtype=float)
+        mag = np.asarray(self.data[lc_indx][filtername]["mag"], dtype=float)
+    
+        # Protect logs; do not invent pre-peak values
+        ph_pos = np.clip(ph, 1e-5, None)          # template support starts at ~0.01 d
+        t_arr  = np.asarray(t, dtype=float)
+        t_pos  = np.clip(t_arr, 1e-5, None)
+    
+        xp = np.log10(ph_pos)
+        x  = np.log10(t_pos)
+    
+        out = np.interp(x, xp, mag, left=np.nan, right=np.nan)
+        # Ensure true pre-peak times are NaN, not the edge value
+        out[t_arr < ph_pos.min()] = np.nan
+        return out
+
+    
 
 
 
