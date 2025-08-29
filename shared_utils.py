@@ -22,7 +22,7 @@ from dustmaps.sfd import SFDQuery
 from pathlib import Path
 from rubin_sim.maf.utils import m52snr
 import tempfile
-
+from ast import literal_eval  
 
 
 
@@ -184,8 +184,8 @@ def get_distance_bounds(d_min=None, d_max=None, z_min=None, z_max=None):
     if z_min is not None and z_max is not None:
         d_min = cosmo.comoving_distance(z_min).to_value(u.Mpc)
         d_max = cosmo.comoving_distance(z_max).to_value(u.Mpc)
-        print(f"[INFO] z_min = {z_min:.5f} → d_min = {d_min:.15f} Mpc")
-        print(f"[INFO] z_max = {z_max:.5f} → d_max = {d_max:.15f} Mpc")
+        print(f"[INFO] z_min = {z_min:.5f} -> d_min = {d_min:.15f} Mpc")
+        print(f"[INFO] z_max = {z_max:.5f} -> d_max = {d_max:.15f} Mpc")
         return d_min, d_max
 
     raise ValueError("You must provide either (d_min, d_max) or (z_min, z_max)")
@@ -267,6 +267,17 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
         df_obs = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
         max_index = len(shared_lc_model.data) - 1
         df_obs = df_obs[df_obs['file_indx'] <= max_index]
+        
+        # 8/28 --- add clean eval_peak_mag here ---
+        def nanmin_clean(arr):
+            v = np.asarray(arr, dtype=float)
+            good = np.isfinite(v) & (v < 90)   # ignore NaNs and 99 placeholders
+            return np.min(v[good]) if np.any(good) else np.nan
+        
+        df_obs['eval_peak_mag'] = df_obs['sid'].map(
+            lambda sid: nanmin_clean(detect_metric.obs_records[sid].get('mag_obs', []))
+        )
+
 
         #8/19
         # Store the injected peak magnitude (from slicer slice_points)
@@ -288,7 +299,62 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
         for col in ['filter', 'mjd_obs', 'mag_obs', 'snr_obs']:
             df_obs[col] = df_obs[col].apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
             # Extract evaluated peak mag from obs_records
-            df_obs['eval_peak_mag'] = df_obs['sid'].map(lambda sid: np.min(detect_metric.obs_records[sid]['mag_obs']) if 'mag_obs' in detect_metric.obs_records[sid] else np.nan)
+
+        #8/28
+        # --- Cadence-aware implanted peaks (apples-to-apples) ---
+        ax1 = DustValues().ax1  # extinction coeffs
+        
+        def _cadence_injected_peak_for_sid(sid, f):
+            """
+            Evaluate the template (noiseless) only at the actual visit times in filter f,
+            then add DM + (EBV*A_f) + (optional K-corr). Return the min (i.e., "peak")
+            seen by the cadence in that band.
+            """
+            rec = detect_metric.obs_records.get(sid, None)
+            if rec is None:
+                return np.nan
+        
+            # visits in this filter
+            filt_arr = np.asarray(rec.get('filter', []))
+            mask = (filt_arr == f)
+            if not np.any(mask):
+                return np.nan
+        
+            mjd_arr = np.asarray(rec.get('mjd_obs', []))[mask]
+            if mjd_arr.size == 0:
+                return np.nan
+        
+            # relative times (days since peak), matching evaluate()
+            tt = mjd_arr - detect_metric.mjd0 - slicer.slice_points['peak_time'][sid]
+        
+            # template index and intrinsic mags at these times
+            idx = int(slicer.slice_points['file_indx'][sid])
+            mags = shared_lc_model.interp(tt, f, idx)
+        
+            finite = np.isfinite(mags)
+            if not np.any(finite):
+                return np.nan
+            mags = mags[finite]
+        
+            # DM + extinction (optional)
+            dm = 5 * np.log10(slicer.slice_points['distance'][sid] * 1e6) - 5
+            if use_extinction:
+                mags = mags + ax1[f] * float(slicer.slice_points['ebv'][sid])
+            mags = mags + dm
+        
+            # K-correction (optional)
+            if use_kcorrect:
+                z = z_at_value(cosmo.comoving_distance, slicer.slice_points['distance'][sid] * u.Mpc)
+                mags = mags + apply_kcorrection(z, f, k_correct_type, k_correct_arg)
+        
+            # cadence-seen "peak" = min over those visit times
+            return float(np.nanmin(mags))
+        
+        # compute/store for all events and filters
+        all_sids = df_obs['sid'].values
+        for f in 'ugrizy':
+            col = f'injected_peak_ebv_mag_{f}_cadence'
+            df_obs[col] = [ _cadence_injected_peak_for_sid(int(sid), f) for sid in all_sids ]
 
 
         n_observations_detected = []
@@ -333,6 +399,21 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
 
         df_obs.to_csv(df_file+f"ObsRecords_{cadence}.csv", index=False)
         print("Obs_Record dataframe saved to", df_file+f"ObsRecords_{cadence}.csv")
+
+        # 8/28 --- Diagnostics (per cadence) ---
+        try:
+            plot_population_diagnostics(
+                df_obs,
+                slicer=slicer,                 # enables fallback + K if needed
+                filtername="r",                # choose your band
+                mjd0=detect_metric.mjd0,       # same mjd0 used in the metric
+                use_kcorrect=use_kcorrect,
+                k_correct_type=k_correct_type,
+                k_correct_arg=k_correct_arg
+            )
+        except Exception as e:
+            print(f"[diag] skipped ({e})")
+
 
         if plot:
             filtername = 'r'
@@ -1072,44 +1153,55 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     t = dataSlice[self.mjdCol] - self.mjd0 - slice_point['peak_time']
 
     # Allocate magnitude array (apparent mags)
-    mags = np.zeros(t.size)
-
-    # Cache
+    # 8/28 mags = np.zeros(t.size)
     filters = dataSlice[self.filterCol]
-    m5 = dataSlice[self.m5Col]
-    dm = 5 * np.log10(slice_point['distance'] * 1e6) - 5  # distance modulus
+    m5      = dataSlice[self.m5Col]
+    dm      = 5 * np.log10(slice_point['distance'] * 1e6) - 5
 
-    # Precompute redshift once per event if using k-corrections
+    mags = np.full(t.size, np.nan)
+    tmin, tmax = None, None
+    if hasattr(self.lc_model, "t_grid"):
+        tg = np.asarray(self.lc_model.t_grid)
+        tmin, tmax = float(tg.min()), float(tg.max())
+
+        # precompute z once if using k-correction
+    z = None
     if self.use_kcorrect:
         z = z_at_value(cosmo.comoving_distance, slice_point['distance'] * u.Mpc)
 
-    # Per-filter evaluation at observed epochs
+    
     for f in np.unique(filters):
-        infilt = np.where(filters == f)[0]
+        idx = np.where(filters == f)[0]
+        tt  = t[idx]
+    
+        # valid only where we have template support
+        valid = np.ones(tt.size, bool)
+        if tmin is not None and tmax is not None:
+            valid &= (tt >= tmin) & (tt <= tmax)
+    
+        # interpolate only for valid times
+        vals = np.full(tt.size, np.nan)
+        if np.any(valid):
+            vals[valid] = self.lc_model.interp(tt[valid], f, slice_point['file_indx'])
+    
+        # K-corr, extinction, DM only on finite values, Precompute redshift once per event if using k-corrections
 
-        # template → observed times
-        mags[infilt] = self.lc_model.interp(t[infilt], f, slice_point['file_indx'])
+        finite = np.isfinite(vals)
+        if self.use_kcorrect and np.any(finite):
+            vals[finite] += apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
+        if self.use_extinction and np.any(finite):
+            vals[finite] += self.ax1[f] * slice_point['ebv']
+        if np.any(finite):
+            vals[finite] += dm
 
-        # K-correction (if enabled)
-        if self.use_kcorrect:
-            k_correction = apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
-            mags[infilt] += k_correction
-
-        # Galactic extinction (if enabled)
-        if self.use_extinction:
-            mags[infilt] += self.ax1[f] * slice_point['ebv']
-            if not self.extinction_printed:
-                print("EBV included")
-                self.extinction_printed = True
-
-        # Distance modulus
-        mags[infilt] += dm
-        
-    #8/27
-    # # LSST single-visit SNR at each observation
-    # snr = m52snr(mags, m5)
-    # times = t
-
+    
+        mags[idx] = vals
+            
+        #8/27
+        # # LSST single-visit SNR at each observation
+        # snr = m52snr(mags, m5)
+        # times = t
+    
     # LSST single-visit SNR at each observation (NaN-aware)
     finite = np.isfinite(mags)
     snr = np.zeros_like(mags, dtype=float)
@@ -1414,8 +1506,8 @@ def plot_population_lcs(pop_file,
         distance, peak_time, file_indx, ebv
         (and peak_app_mag_* if using fast_peaks).
     - External helpers:
-        • `DustValues().ax1` → extinction coefficients
-        • `apply_kcorrection(...)` → optional K(z,f)
+        • `DustValues().ax1` to extinction coefficients
+        • `apply_kcorrection(...)` to optional K(z,f)
     
     Key Notes
     ---------
@@ -1501,19 +1593,14 @@ def plot_population_lcs(pop_file,
         from local_GRBafterglows_metric import LC
         lc_model = LC(load_from=templates_file)
 
-    # time grid (avoid log of negatives by clipping to ≥1e-5 for plotting)
-    if days_before is None or days_after is None:
-        # Use the template’s own grid span
-        t_rel = lc_model.data[file_indx][f]['ph']
-    else:
-        # Use a uniform grid based on days_before/after
-        t_rel = np.linspace(-days_before, days_after, n_time)
-
+    # choose a generic relative grid
+    t_rel = np.linspace(-days_before, days_after, n_time)
     t_plot = _np.log10(_np.maximum(t_rel, 1e-5)) if use_log_time else t_rel
-
-    # Optional: avoid evaluating before template start (prevents 99-mag padding)
+    
+    # template bounds once
     t0 = getattr(lc_model, "t_grid", _np.array([0.0]))[0]
-    t_eval = _np.maximum(t_rel, t0)
+    t1 = getattr(lc_model, "t_grid", _np.array([0.0]))[-1]
+    t_eval = _np.clip(t_rel, t0, t1)  # stays within template support
 
     for sid in sids:
         file_indx = int(_np.asarray(slice_points['file_indx']).ravel()[sid].item())
@@ -1529,14 +1616,15 @@ def plot_population_lcs(pop_file,
 
         for f in filters:
             m_abs = lc_model.interp(t_eval, f, file_indx)
-            # pad out pre-peak times with NaN
-            m_abs = _np.where(t_rel < t0, _np.nan, m_abs)
+            # NaN outside support
+            m_abs = _np.where((t_rel < t0) | (t_rel > t1), _np.nan, m_abs)
+    
             kcorr = apply_kcorrection(z, f, k_correct_type, k_correct_arg) if use_kcorrect else 0.0
             A_f   = ax1[f] * ebv if use_extinction else 0.0
             m_app = m_abs + kcorr + A_f + dm
-
             plt.plot(t_plot, m_app, color=colors.get(f, 'gray'),
                      label=f if sid == sids[0] else None, alpha=0.6)
+
 
         title = (f"Population LC (apparent): SID {sid} | idx={file_indx} | "
                  f"d={dist_mpc:.0f} Mpc | E(B−V)={ebv:.03f}")
@@ -1577,3 +1665,202 @@ def atomic_save_pickle(obj, path):
         except Exception:
             pass
 
+#8/28
+def plot_population_diagnostics(
+    df_obs,
+    slicer=None,
+    filtername="g",
+    mjd0=60980.5,
+    use_kcorrect=False,
+    k_correct_type=None,
+    k_correct_arg=None,
+    bins_gap=np.arange(-5, 30.5, 0.5),
+    bins_mag=np.arange(14, 28.5, 0.25),
+    prefer_cadence=True,
+    show_residuals=True,
+):
+    import numpy as _np
+    import matplotlib.pyplot as _plt
+
+    # ---------- helpers ----------
+    def _first_or_nan(lst):
+        if lst is None:
+            return _np.nan
+        try:
+            return lst[0] if len(lst) else _np.nan
+        except Exception:
+            return _np.nan
+
+    def _min_in_filter(filters, mags, f):
+        if filters is None or mags is None:
+            return _np.nan
+        filters = _np.asarray(filters)
+        mags    = _np.asarray(mags, dtype=float)
+        mask = (filters == f) & _np.isfinite(mags) & (mags < 90)  # drop 99 placeholders
+        return float(_np.min(mags[mask])) if _np.any(mask) else _np.nan
+
+    # ---------- coerce list-like ----------
+    df = df_obs.copy()
+    for col in ["mjd_obs", "mag_obs", "filter"]:
+        if col in df.columns:
+            df[col] = df[col].apply(
+                lambda x: list(x) if isinstance(x, (list, _np.ndarray))
+                else ([] if pd.isna(x) else [x])
+            )
+
+    detected = df["detected"].astype(bool) if "detected" in df.columns else _np.zeros(len(df), bool)
+
+    # ---------- (A) time gap ----------
+    dt_first = _np.full(len(df), _np.nan)
+    if "peak_time" in df.columns and "mjd_obs" in df.columns:
+        peak_mjd  = mjd0 + df["peak_time"].astype(float).values
+        first_mjd = _np.array([_first_or_nan(sorted(x)) for x in df["mjd_obs"].values], float)
+        dt_first  = first_mjd - peak_mjd
+
+        vals_nd = dt_first[~detected & _np.isfinite(dt_first)]
+        vals_d  = dt_first[ detected & _np.isfinite(dt_first)]
+        _plt.figure(figsize=(7.5, 4.5))
+        if vals_nd.size: _plt.hist(vals_nd, bins=bins_gap, alpha=0.5, label="non-detected")
+        if vals_d.size:  _plt.hist(vals_d,  bins=bins_gap, alpha=0.8, label="detected")
+        _plt.axvline(0, ls="--", lw=1, color="k")
+        _plt.xlabel("First observation − Peak (days)")
+        _plt.ylabel("Number of events")
+        _plt.title("Time gap to first observation")
+        _plt.legend()
+        _plt.grid(True, alpha=0.3)
+        _plt.tight_layout()
+        _plt.show()
+
+    # ---------- choose band if needed ----------
+    def _best_band(df):
+        counts = {}
+        for f in "ugrizy":
+            v = _np.array([_min_in_filter(F, M, f) for F, M in zip(df["filter"], df["mag_obs"])], float)
+            counts[f] = _np.sum(_np.isfinite(v))
+        return max(counts, key=counts.get) if counts else "r"
+
+    if filtername is None:
+        filtername = _best_band(df)
+
+  # ---------- (B) observed peak mag in band ----------
+    use_dict = "per_filter_min_mag" in df.columns
+    
+    def _parse_dict(d):
+        # handle dicts saved as strings in CSV
+        if isinstance(d, str):
+            try:
+                v = literal_eval(d)
+            except Exception:
+                return {}
+            return v if isinstance(v, dict) else {}
+        return d if isinstance(d, dict) else {}
+    
+    if use_dict:
+        parsed = df["per_filter_min_mag"].apply(_parse_dict)
+        usable = parsed.apply(lambda d: any(_np.isfinite(list(d.values()))) if d else False)
+        if usable.sum() < 0.2 * len(df):  # <20% usable → fallback
+            print("[diag] per_filter_min_mag mostly empty — recomputing from lists.")
+            use_dict = False
+        else:
+            df["per_filter_min_mag"] = parsed  # keep parsed dicts
+    
+    if use_dict:
+        def _pull(d):
+            try:
+                x = d.get(filtername, _np.nan) if isinstance(d, dict) else _np.nan
+                return x if (_np.isfinite(x) and x < 90) else _np.nan
+            except Exception:
+                return _np.nan
+
+        m_obs_peak_f = df["per_filter_min_mag"].apply(_pull).astype(float).values
+    else:
+        # recompute from lists
+        m_obs_peak_f = _np.array([
+            _min_in_filter(F, M, filtername) for F, M in zip(df["filter"], df["mag_obs"])
+        ], dtype=float)
+    
+    vals_nd = m_obs_peak_f[~detected & _np.isfinite(m_obs_peak_f)]
+    vals_d  = m_obs_peak_f[ detected & _np.isfinite(m_obs_peak_f)]
+    _plt.figure(figsize=(7.5, 4.5))
+    if vals_nd.size: _plt.hist(vals_nd, bins=bins_mag, alpha=0.5, label="non-detected")
+    if vals_d.size:  _plt.hist(vals_d,  bins=bins_mag, alpha=0.8, label="detected")
+    _plt.xlabel(f"Observed peak apparent mag ({filtername})")
+    _plt.ylabel("Number of events")
+    _plt.title(f"Peak apparent magnitude in {filtername}-band")
+    _plt.legend()
+    _plt.grid(True, alpha=0.3)
+    _plt.tight_layout()
+    _plt.show()
+
+
+    # ---------- (C) implanted vs observed ----------
+    inj_base = f"injected_peak_ebv_mag_{filtername}"
+    inj_cad  = f"{inj_base}_cadence"
+    
+    if prefer_cadence and inj_cad in df.columns:
+        m_inj = df[inj_cad].astype(float).values
+        inj_label = f"Implanted peak ({filtername}, cadence-aware)"
+    elif inj_base in df.columns:
+        m_inj = df[inj_base].astype(float).values
+        inj_label = f"Implanted peak ({filtername}, global)"
+    else:
+        # fallback to slicer reconstruction
+        m_inj = _np.full(len(df), _np.nan)
+        if (slicer is not None and
+            all(k in slicer.slice_points for k in ["distance","ebv","file_indx"]) and
+            "distance_modulus" in df.columns):
+            ax1 = dust_model.ax1
+            dist_mod = df["distance_modulus"].astype(float).values
+            ebv_vals = _np.asarray(slicer.slice_points["ebv"])
+            key_abs = f"peak_mag_abs_{filtername}"
+            if key_abs in slicer.slice_points:
+                m_abs = _np.asarray(slicer.slice_points[key_abs], dtype=float)
+                if len(m_abs) == len(df):
+                    m_inj = m_abs + dist_mod + ax1[filtername] * ebv_vals
+        inj_label = f"Implanted peak ({filtername}, fallback)"
+
+    m_obs = m_obs_peak_f.copy()
+
+    if use_kcorrect and slicer is not None and _np.any(_np.isfinite(m_inj)):
+        try:
+            z_all = z_at_value(cosmo.comoving_distance, _np.asarray(slicer.slice_points["distance"]) * u.Mpc)
+            kcorr = _np.array([apply_kcorrection(zz, filtername, k_correct_type, k_correct_arg) for zz in _np.atleast_1d(z_all)], float)
+            if kcorr.shape[0] == m_inj.shape[0]:
+                m_inj = m_inj + kcorr
+        except Exception:
+            pass
+
+    good = _np.isfinite(m_inj) & _np.isfinite(m_obs)
+    if _np.any(good):
+        _plt.figure(figsize=(5.6, 5.2))
+        _plt.scatter(m_inj[~detected & good], m_obs[~detected & good], s=10, alpha=0.5, label="non-detected")
+        _plt.scatter(m_inj[ detected & good], m_obs[ detected & good], s=18, alpha=0.8, label="detected")
+        lo, hi = m_inj[good].min(), m_inj[good].max()
+        _plt.plot([lo, hi], [lo, hi], 'k--', lw=1)
+        _plt.gca().invert_xaxis()
+        _plt.gca().invert_yaxis()
+        _plt.xlabel(inj_label)
+        _plt.ylabel(f"Observed peak mag ({filtername})")
+        _plt.title(f"Implanted vs Observed peak ({filtername})")
+        _plt.legend()
+        _plt.grid(True, alpha=0.3)
+        _plt.tight_layout()
+        _plt.show()
+
+        if show_residuals:
+            res = m_obs[good] - m_inj[good]
+            vals_nd = res[~detected[good]]
+            vals_d  = res[ detected[good]]
+            _plt.figure(figsize=(7.5, 4.5))
+            if vals_nd.size: _plt.hist(vals_nd, bins=_np.arange(-3, 3.05, 0.05), alpha=0.5, label="non-detected")
+            if vals_d.size:  _plt.hist(vals_d,  bins=_np.arange(-3, 3.05, 0.05), alpha=0.8, label="detected")
+            _plt.xlabel("Observed − Implanted (mag)")
+            _plt.ylabel("Number of events")
+            _plt.title(f"Peak mag residuals ({filtername})")
+            _plt.axvline(0, color='k', ls='--', lw=1)
+            _plt.grid(True, alpha=0.3)
+            _plt.legend()
+            _plt.tight_layout()
+            _plt.show()
+    else:
+        print("[diag] no finite points for implanted vs observed comparison.")

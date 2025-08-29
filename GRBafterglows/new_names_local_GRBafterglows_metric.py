@@ -315,12 +315,21 @@ class Detect_Metric(Base_Metric):
         fade_time = np.nan
 
         # 8/25
+        # per_filter_min_mag = {}
+        # for f in np.unique(obs_record['filter']):
+        #     fmask = (obs_record['filter'] == f)
+        #     if np.any(fmask):
+        #         per_filter_min_mag[f] = float(np.min(obs_record['mag_obs'][fmask]))
+        # obs_record['per_filter_min_mag'] = per_filter_min_mag  # small dict
+        #8/28
         per_filter_min_mag = {}
         for f in np.unique(obs_record['filter']):
             fmask = (obs_record['filter'] == f)
             if np.any(fmask):
-                per_filter_min_mag[f] = float(np.min(obs_record['mag_obs'][fmask]))
-        obs_record['per_filter_min_mag'] = per_filter_min_mag  # small dict
+                vals = np.asarray(obs_record['mag_obs'][fmask], dtype=float)
+                good = np.isfinite(vals) & (vals < 90)   # drop sentinels if any
+                per_filter_min_mag[f] = float(np.nanmin(vals[good])) if np.any(good) else np.nan
+        obs_record['per_filter_min_mag'] = per_filter_min_mag
 
     
         if np.any(detected_mask):
