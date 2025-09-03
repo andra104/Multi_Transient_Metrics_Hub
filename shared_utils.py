@@ -1714,8 +1714,11 @@ def plot_population_diagnostics(
     dt_first = _np.full(len(df), _np.nan)
     if "peak_time" in df.columns and "mjd_obs" in df.columns:
         peak_mjd  = mjd0 + df["peak_time"].astype(float).values
-        first_mjd = _np.array([_first_or_nan(sorted(x)) for x in df["mjd_obs"].values], float)
-        dt_first  = first_mjd - peak_mjd
+        #9/03
+        #first_mjd = _np.array([_first_or_nan(sorted(x)) for x in df["mjd_obs"].values], float)
+        # First *detectable* visit, already stored in df_obs
+        first_det_mjd = df["first_det_mjd"].astype(float).values
+        dt_first  = first_det_mjd - peak_mjd
 
         vals_nd = dt_first[~detected & _np.isfinite(dt_first)]
         vals_d  = dt_first[ detected & _np.isfinite(dt_first)]
