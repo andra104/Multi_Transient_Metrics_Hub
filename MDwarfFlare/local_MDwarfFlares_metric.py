@@ -1,5 +1,5 @@
 from rubin_sim.maf.metrics import BaseMetric
-from rubin_sim.maf.slicers import UserPointsSlicer
+
 #from rubin_sim.utils import uniformSphere
 #from rubin_sim.data import get_data_dir
 from rubin_scheduler.data import get_data_dir #local
@@ -10,12 +10,10 @@ import os
 sys.path.append(os.path.abspath(".."))
 from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, apply_spectral_index, evaluate
 
-from rubin_sim.maf.utils import m52snr
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 from astropy.cosmology import Planck18 as cosmo
 from astropy.coordinates import Galactic, ICRS as ICRSFrame
 from astropy.coordinates import SkyCoord
-from dustmaps.sfd import SFDQuery
 #from rubin_sim.phot_utils import SFDMap
 import astropy.units as u
 import healpy as hp
@@ -26,9 +24,19 @@ import glob
 import os
 
 import pickle 
+from pathlib import Path
 
 DEBUG = False
-MAXGAP = 1
+# MAXGAP = 1
+
+FILTER_CENTRAL_FREQS = {
+    'u': 8.088e14,
+    'g': 6.293e14,
+    'r': 4.844e14,
+    'i': 3.979e14,
+    'z': 3.461e14,
+    'y': 3.080e14,
+}
 
 # # ------------------------------------------------------
 # # Light Curve Model
@@ -286,34 +294,31 @@ MAXGAP = 1
 #             left=99, right=99
 #         )
 
-
+#9/3
 class LC:
     """
-    Flare-only M Dwarf light curves.
-    - Variable duration per event: 30 min – 4 hours.
-    - Instant drop back to quiescent after peak.
-    - Peak amplitude: 0.7–1.0 mag brighter than quiescent.
+    M-dwarf flare light curves with shared per-event parameters:
+      - m_quiescent_ref : quiescent mag in a reference band (default r)
+      - delta_mag_ref   : peak brightening (mag) in the reference band
+      - fade_time       : days to return to quiescent
+      - gamma           : fade curve shape (0.5–0.9 = fast early fade)
+      - beta_quiescent  : quiescent SED slope (Fν ∝ ν^β) to get per-filter quiescent mags
+      - amp_index       : amplitude color law exponent; Δmag_f ∝ (ν_f/ν_ref)^{amp_index}
+
+    Support is post-peak only (t>0). Pre-peak samples return NaN.
     """
 
-    def __init__(self, num_lightcurves=1000, load_from=None):
-        self.data = []
+    def __init__(self, num_lightcurves=1000, load_from=None, ref_filter="r"):
+        import numpy as np, pickle, os
+
         self.filts = ["u", "g", "r", "i", "z", "y"]
-        rng = np.random.default_rng(42)
+        self.data = []
+        self.ref_filter = ref_filter
 
-        # For backward compatibility in plotting functions
-        self.t_grid = np.linspace(-0.05, 0.17, 15)  # dummy representative grid
+        # Shared bounds used by evaluate() to understand support
+        # (we model up to 12 hours after peak)
+        self.t_grid = np.geomspace(1e-5, 0.5, 60)
 
-        # Quiescent magnitude ranges (for amplitude reference)
-        QUIESCENT_MAG_RANGES = { 
-            'u': (17.5, 20.5),
-            'g': (16.5, 19.5),
-            'r': (15.0, 18.0),
-            'i': (13.0, 15.5),
-            'z': (12.0, 13.5),
-            'y': (11.5, 12.7)
-        }
-
-        # Load from file if exists
         if load_from and os.path.exists(load_from):
             with open(load_from, 'rb') as f:
                 obj = pickle.load(f)
@@ -322,69 +327,125 @@ class LC:
             print(f"Loaded flare templates from {load_from}")
             return
 
-        # Generate synthetic flare LCs
+        rng = np.random.default_rng(42)
+
+        # Parameter priors (tweak as desired)
+        # Quiescent (anchor in r-band to match your earlier ranges)
+        MQUI_R_RANGE   = (15.0, 18.0)    # mag in r
+        DELTA_MAG_REF  = (0.7, 1.0)      # mag brightening at peak in ref band
+        FADE_TIME_RANGE= (0.02, 0.17)    # days (≈30 min – 4 hr)
+        GAMMA_RANGE    = (0.5, 0.9)      # shape of fade
+        BETA_Q_RANGE   = (-1.3, -0.7)    # red SED (M dwarfs): Fν ∝ ν^β, β ~ -1
+        AMP_INDEX_RANGE= (0.5, 1.0)      # stronger amplitude at higher ν
+
+        nu_ref = FILTER_CENTRAL_FREQS[self.ref_filter]
+
         for _ in range(num_lightcurves):
+            # Shared per-event parameters
+            m_quiescent_ref = rng.uniform(*MQUI_R_RANGE)
+            delta_mag_ref   = rng.uniform(*DELTA_MAG_REF)
+            fade_time       = rng.uniform(*FADE_TIME_RANGE)
+            gamma           = rng.uniform(*GAMMA_RANGE)
+            beta_quiescent  = rng.uniform(*BETA_Q_RANGE)
+            amp_index       = rng.uniform(*AMP_INDEX_RANGE)
+
+            # Event-specific time grid (up to ~3×fade_time, capped at 0.5 d)
+            t_end = min(3.0 * fade_time, 0.5)
+            t_ev  = np.geomspace(1e-5, t_end, 48)
+
             lc = {}
-
-            # Pick random flare duration in days (0.02 = 30min, 0.17 = 4hr)
-            total_duration = rng.uniform(0.02, 0.17) 
-            rise_fraction = rng.uniform(0.15, 0.3)  # fraction for rise phase
-
-            # Time arrays
-            t_rise = np.linspace(-rise_fraction * total_duration, 0, 12, endpoint=False)  # rise to peak
-            t_fade = np.linspace(0, total_duration, 12)  # fade starting at peak (t=0)
-            t_grid_event = np.concatenate([t_rise, t_fade])
-            
-            # Rise/fade durations
-            rise_time_days = abs(t_rise[0])  # days from start of rise to peak
-            fade_time_days = total_duration  # fade duration starts at peak
-            
             for f in self.filts:
-                qmin, qmax = QUIESCENT_MAG_RANGES[f]
-                quiescent = rng.uniform(qmin, qmax) 
-            
-                # Peak brightness
-                peak_mag = quiescent - rng.uniform(0.7, 1.0)
-            
-                # Rise: steep brightening to peak
-                rise_rate = rng.uniform(5, 15)
-                mag_rise = peak_mag - rise_rate * (t_rise - np.min(t_rise)) / np.ptp(t_rise)
-            
-                # Fade: instant from peak and over `t_fade`
-                fade_rate = rng.uniform(8, 20)
-                mag_fade = peak_mag + fade_rate * (t_fade / total_duration)
-            
-                # Combine: rise + fade
-                mag_f = np.concatenate([mag_rise, mag_fade])
-            
+                # Quiescent per filter from a simple power-law SED
+                m_quiescent_f = apply_spectral_index(
+                    m_quiescent_ref, f, ref_filter=self.ref_filter, beta=beta_quiescent
+                )
+
+                # Amplitude color law: bigger Δ in blue
+                nu_f = FILTER_CENTRAL_FREQS[f]
+                amp_scale = (nu_f / nu_ref) ** amp_index
+                delta_mag_f = delta_mag_ref * amp_scale
+                # Optionally clamp to keep things sane
+                delta_mag_f = float(np.clip(delta_mag_f, 0.3, 1.8))
+
+                m_peak_f = m_quiescent_f - delta_mag_f
+
+                # Fade curve (power-law-ish in time fraction)
+                frac = np.clip(t_ev / fade_time, 0.0, 1.0)
+                mag  = m_peak_f + delta_mag_f * (frac ** gamma)
+                mag[t_ev >= fade_time] = m_quiescent_f
+
                 lc[f] = {
-                    'ph': t_grid_event,
-                    'mag': mag_f,
-                    'rise_time_days': rise_time_days,
-                    'fade_time_days': fade_time_days
+                    "ph":  t_ev,
+                    "mag": mag,
+                    # store reference + diagnostics
+                    "quiescent_mag": m_quiescent_f,
+                    "delta_mag":     delta_mag_f,
+                    "fade_time":     fade_time,
+                    "gamma":         gamma,
+                    "m_quiescent_ref": m_quiescent_ref,
+                    "delta_mag_ref":   delta_mag_ref,
+                    "beta_quiescent":  beta_quiescent,
+                    "amp_index":       amp_index,
+                    "ref_filter":      self.ref_filter,
                 }
 
             self.data.append(lc)
 
     def interp(self, t, filtername, lc_indx=0):
-        """Interpolate magnitude at given time(s)."""
-        ph = self.data[lc_indx][filtername]['ph']
-        mag = self.data[lc_indx][filtername]['mag']
-        return np.interp(t, ph, mag, left=99, right=99)
+        """
+        Post-peak, log-time interpolation (like GRB).
+        Pre-peak (t<=0) → NaN.
+        """
+        import numpy as np
+
+        ph  = np.asarray(self.data[lc_indx][filtername]["ph"],  dtype=float)  # >0
+        mag = np.asarray(self.data[lc_indx][filtername]["mag"], dtype=float)
+
+        t_arr = np.asarray(t, dtype=float)
+        # Map t<=0 → NaN. Clamp >0 to small floor to avoid log10(0)
+        t_pos = np.where(t_arr > 0, t_arr, np.nan)
+        t_pos = np.clip(t_pos, 1e-5, None)
+
+        xp = np.log10(ph)
+        x  = np.log10(t_pos)
+
+        out = np.interp(x, xp, mag, left=np.nan, right=np.nan)
+        out[~np.isfinite(t_arr) | (t_arr <= 0)] = np.nan
+        return out
+
 
 
 # ------------------------------------------------------
 # Base MDwarfFlare Metric
 # ------------------------------------------------------
+#9/3 updated for new format 
 class Base_Metric(BaseMetric):
-    def __init__(self, metricName='Base_Metric',
+    def __init__(self, metricName='BaseMDwarfFlareMetric', 
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
-                 filterCol='filter', nightCol='night',
-                 mjd0=60980.5, outputLc=False, badval=-666, use_kcorrect=False,
-                 k_correct_type=None, k_correct_arg=None,
-                 filter_include=None, load_from="MDwarfFlares_templates.pkl", use_extinction=True,
-                 lc_model=None, **kwargs):
-
+                 filterCol='filter', nightCol='night', mjd0=60980.5, outputLc=False, badval=-666,
+                 filter_include=None,
+                 load_from="MDwarfFlares_templates.pkl",
+                 lc_model=None, use_extinction=True, use_kcorrect=False, k_correct_type=None, k_correct_arg=None,
+                 # NEW: diagnostic sampling controls
+                 diag_store=True,
+                 diag_sample_rate=0.01,       # Bernoulli keep prob for each obs row
+                 diag_per_event_cap=30,       # hard cap per event after sampling
+                 diag_min_snr=None,           # e.g., 3 or 5 to gate by SNR
+                 diag_max_mag=None,           # e.g., 24 to gate by brightness
+                 **kwargs):
+        """
+        Parameters
+        ----------
+        lc_model : LC or None
+            M Dwarf Flare model object. If None, load from file.
+        """
+        self.diag_store = diag_store
+        self.diag_sample_rate = float(diag_sample_rate)
+        self.diag_per_event_cap = int(diag_per_event_cap)
+        self.diag_min_snr = None if diag_min_snr is None else float(diag_min_snr)
+        self.diag_max_mag = None if diag_max_mag is None else float(diag_max_mag)
+        self._rng = np.random.default_rng(12345)  # stable, cheap
+        
         if lc_model is not None:
             self.lc_model = lc_model
         else:
@@ -399,10 +460,16 @@ class Base_Metric(BaseMetric):
         self.outputLc = outputLc
         self.filter_include = filter_include
         self.use_extinction = use_extinction
+        self.use_kcorrect = use_kcorrect
+        self.k_correct_type = k_correct_type
+        self.k_correct_arg = k_correct_arg
         self.extinction_printed = False
 
         cols = [mjdCol, m5Col, filterCol, nightCol]
-        super().__init__(col=cols, metric_name=metricName, units='Detection Efficiency', badval=badval, **kwargs)
+        super().__init__(col=cols, metric_name=metricName,
+                         units='Detection Efficiency',
+                         badval=badval, **kwargs)
+
 
 
     def detect(self, filters, snr, times, obs_record):
@@ -490,6 +557,15 @@ class Detect_Metric(Base_Metric):
         last_det_mjd = np.nan
         #rise_time = np.nan
         fade_time = np.nan
+
+        per_filter_min_mag = {}
+        for f in np.unique(obs_record['filter']):
+            fmask = (obs_record['filter'] == f)
+            if np.any(fmask):
+                vals = np.asarray(obs_record['mag_obs'][fmask], dtype=float)
+                good = np.isfinite(vals) & (vals < 90)   # drop sentinels if any
+                per_filter_min_mag[f] = float(np.nanmin(vals[good])) if np.any(good) else np.nan
+        obs_record['per_filter_min_mag'] = per_filter_min_mag
     
         if np.any(detected_mask):
             first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
