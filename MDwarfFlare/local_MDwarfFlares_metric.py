@@ -294,7 +294,7 @@ FILTER_CENTRAL_FREQS = {
 #             left=99, right=99
 #         )
 
-#9/3
+#9/3-9/4
 class LC:
     """
     M-dwarf flare light curves with shared per-event parameters:
@@ -370,14 +370,22 @@ class LC:
                 m_peak_f = m_quiescent_f - delta_mag_f
 
                 # Fade curve (power-law-ish in time fraction)
-                frac = np.clip(t_ev / fade_time, 0.0, 1.0)
-                mag  = m_peak_f + delta_mag_f * (frac ** gamma)
-                mag[t_ev >= fade_time] = m_quiescent_f
-
+                #9/5 tail-free (recommended)
+                eps  = 1e-6  # days; keep us just shy of fade_time
+                mask = t_ev < (fade_time - eps)
+                t_use = t_ev[mask]
+                
+                # if fade_time is so short that mask is empty, keep a single peak sample
+                if t_use.size == 0:
+                    t_use = np.array([1e-5])
+                    mag_use = np.array([m_peak_f])
+                else:
+                    frac    = t_use / fade_time            # in (0,1)
+                    mag_use = m_peak_f + delta_mag_f * (frac ** gamma)
+                
                 lc[f] = {
-                    "ph":  t_ev,
-                    "mag": mag,
-                    # store reference + diagnostics
+                    "ph":  t_use,          # no samples at/after fade_time
+                    "mag": mag_use,
                     "quiescent_mag": m_quiescent_f,
                     "delta_mag":     delta_mag_f,
                     "fade_time":     fade_time,
@@ -388,6 +396,7 @@ class LC:
                     "amp_index":       amp_index,
                     "ref_filter":      self.ref_filter,
                 }
+
 
             self.data.append(lc)
 
