@@ -265,7 +265,7 @@ class Base_Metric(BaseMetric):
                 # if np.any(np.abs(mags_in_filter - mag)>.1): #TODO: implement error
                     # print("we got a detection!")
                 
-                if np.any(compare_flux_diff_to_error(mags_in_filter, mag, snr_in_filter, one_snr, return_bool=True)):
+                if np.any(compare_flux_diff_to_error(mags_in_filter, mag, snr_in_filter, one_snr, return_bool=True)): #shar sept
                     detected=True
                     return detected
 
