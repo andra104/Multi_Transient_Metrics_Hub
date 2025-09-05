@@ -8,7 +8,7 @@ from rubin_sim.phot_utils import DustValues
 import sys
 import os
 sys.path.append(os.path.abspath(".."))
-from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, apply_spectral_index, evaluate
+from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, apply_spectral_index, evaluate, compare_flux_diff_to_error
 
 import matplotlib.pyplot as plt 
 from astropy.cosmology import Planck18 as cosmo
@@ -259,11 +259,15 @@ class Base_Metric(BaseMetric):
             if np.sum(np.abs(snr_in_filter - obs_record['snr_obs'][mask]))>0:
                 print("ERROR ERROR INDEXING ERROR") #shar
                 print(np.sum(np.abs(snr_in_filter - obs_record['snr_obs'][mask])))
-            for mag in mags_in_filter:
+            for i, mag in enumerate(mags_in_filter):
+                one_snr = snr_in_filter[i]
                 # print(mags_in_filter - mag)
-                if np.any(np.abs(mags_in_filter - mag)>.1): #TODO: implement error
+                # if np.any(np.abs(mags_in_filter - mag)>.1): #TODO: implement error
                     # print("we got a detection!")
-                    detected = True
+                
+                if np.any(compare_flux_diff_to_error(mags_in_filter, mag, snr_in_filter, one_snr, return_bool=True)):
+                    detected=True
+                    return detected
 
                     
         return detected

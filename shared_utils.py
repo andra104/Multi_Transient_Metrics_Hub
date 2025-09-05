@@ -273,7 +273,8 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             v = np.asarray(arr, dtype=float)
             good = np.isfinite(v) & (v < 90)   # ignore NaNs and 99 placeholders
             return np.min(v[good]) if np.any(good) else np.nan
-        
+
+        #shar sept note that this line is giving me an error so i tend to comment it out when running
         df_obs['eval_peak_mag'] = df_obs['sid'].map(
             lambda sid: nanmin_clean(detect_metric.obs_records[sid].get('mag_obs', []))
         )
@@ -1867,3 +1868,42 @@ def plot_population_diagnostics(
             _plt.show()
     else:
         print("[diag] no finite points for implanted vs observed comparison.")
+
+# -------------------------------------------
+# functions for error/uncertainty - shar sept
+# -------------------------------------------
+
+def mag_to_flux(mag, F0=8.9):
+    '''
+    converts mag to flux (in janskys if you use the default F0)
+    '''
+    return F0 * 10**(-mag / 2.5)
+
+def get_noise(snr, mag, F0=8.9):
+    '''
+    gets noise from snr and mag (in janskys if you use the default F0)
+    '''
+    flux = mag_to_flux(mag, F0)
+    noise = flux / snr
+    return noise
+
+def compare_flux_diff_to_error(mag_1, mag_2, snr_1, snr_2, F0=8.9, return_bool=False):
+    '''
+    returns flux diff divided by errors combined in quadrature
+    insensitive to choice of F0
+    we want this value to be greater than 3 in order for a change in 
+    magnitude to be above our uncertainty limit
+    returns the ratio, unless return_Bool=True, then returns 
+    a boolean of whether the ratio is greater than 3
+    '''
+    F_1 = mag_to_flux(mag_1, F0)
+    F_2 = mag_to_flux(mag_2, F0)
+    flux_diff = F_1 - F_2 #this does not depend on F0
+
+    noise_1 = get_noise(snr_1, mag_1, F0) #this does depend on F0
+    noise_2 = get_noise(snr_2, mag_2, F0)
+    error_combo = np.sqrt(noise_1**2 + noise_2**2)
+
+    if return_bool==True:
+        return np.abs(flux_diff / error_combo) > 3
+    return np.abs(flux_diff / error_combo)
