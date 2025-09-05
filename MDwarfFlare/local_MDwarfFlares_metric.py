@@ -28,7 +28,7 @@ import os
 import pickle 
 
 DEBUG = False
-MAXGAP = 1
+
 
 # # ------------------------------------------------------
 # # Light Curve Model
@@ -287,21 +287,38 @@ MAXGAP = 1
 #         )
 
 
-class LC:
+class LC: #shar sept
     """
     Flare-only M Dwarf light curves.
-    - Variable duration per event: 30 min – 4 hours.
-    - Instant drop back to quiescent after peak.
-    - Peak amplitude: 0.7–1.0 mag brighter than quiescent.
+    Flare peak (delta mags): 0-3 (should have distribution peak around .7, sampled in non-log, rn uniform)
+    Decay time: 60 seconds to 11000 seconds (should be evenly sampled in log, rn in linear)
+    starts at peak
+    
     """
 
     def __init__(self, num_lightcurves=1000, load_from=None):
         self.data = []
         self.filts = ["u", "g", "r", "i", "z", "y"]
+        self.ratios_quiescent = { #SHAR FIX should be 3000 or so
+            'u': 0.47184822835586304,
+            'g': 1.0,
+            'r': 0.4356131668415372,
+            'i': 0.20399584045639102,
+            'z': 0.09743514963840874,
+            'y': 0.0347938320584038
+        }
+        self.ratios_peak = { #for the flare #SHAR FIX should be 10000 K
+            'u': 0.47184822835586304,
+            'g': 1.0,
+            'r': 0.4356131668415372,
+            'i': 0.20399584045639102,
+            'z': 0.09743514963840874,
+            'y': 0.0347938320584038
+        }
         rng = np.random.default_rng(42)
 
         # For backward compatibility in plotting functions
-        self.t_grid = np.linspace(-0.05, 0.17, 15)  # dummy representative grid
+        self.t_grid = np.linspace(-0.05, 0.17, 15)  # dummy representative grid #shar sept do we use this? should think about whether it is correct if so #shar todo
 
         # Quiescent magnitude ranges (for amplitude reference)
         QUIESCENT_MAG_RANGES = { 
@@ -323,46 +340,71 @@ class LC:
             return
 
         # Generate synthetic flare LCs
-        for _ in range(num_lightcurves):
+        for i, _ in enumerate(range(num_lightcurves)):
             lc = {}
 
-            # Pick random flare duration in days (0.02 = 30min, 0.17 = 4hr)
-            total_duration = rng.uniform(0.02, 0.17) 
-            rise_fraction = rng.uniform(0.15, 0.3)  # fraction for rise phase
+            # Pick flare duration in days (60 seconds to 11000 seconds) #shar sept
+            total_duration = rng.uniform(60, 11000) /(60*60*24) #conversion factor seconds to days
+            # rise_fraction = rng.uniform(0.15, 0.3)  # fraction for rise phase
 
-            # Time arrays
-            t_rise = np.linspace(-rise_fraction * total_duration, 0, 12, endpoint=False)  # rise to peak
-            t_fade = np.linspace(0, total_duration, 12)  # fade starting at peak (t=0)
-            t_grid_event = np.concatenate([t_rise, t_fade])
+            # Time arrays #shar sept
+            # t_rise = np.linspace(-rise_fraction * total_duration, 0, 12, endpoint=False)  # rise to peak
+            # t_fade = np.linspace(0, total_duration, 12)  
+            t_fade = np.array([0,total_duration]) # fade starting at peak (t=0)
+            # t_grid_event = np.concatenate([t_rise, t_fade])
+            t_grid_event = t_fade
             
             # Rise/fade durations
-            rise_time_days = abs(t_rise[0])  # days from start of rise to peak
-            fade_time_days = total_duration  # fade duration starts at peak
+            # rise_time_days = abs(t_rise[0])  # days from start of rise to peak
+            # fade_time_days = total_duration  # fade duration starts at peak
+
+            #delta mag at peak #shar todo
+            delta_mag = rng.uniform(0,3) #ideally we want the distribution peaked around .7 instead of uniform
+            f='g'
+            # for f in self.filts:
+            qmin, qmax = QUIESCENT_MAG_RANGES[f]
+            quiescent = rng.uniform(qmin, qmax) 
+        
+            # Peak brightness
+            peak_mag = quiescent - delta_mag
+
+            mag_fade = np.array([peak_mag, quiescent])
+        
+            # Rise: steep brightening to peak
+            # rise_rate = rng.uniform(5, 15)
+            # mag_rise = peak_mag - rise_rate * (t_rise - np.min(t_rise)) / np.ptp(t_rise)
+        
+            # Fade: instant from peak and over `t_fade`
+            # fade_rate = delta_mag/total_duration
+            # mag_fade = peak_mag + fade_rate * (t_fade / total_duration)
+        
+            # Combine: rise + fade
+            # mag_f = np.concatenate([mag_rise, mag_fade])
+        
+            lc[f] = {
+                'ph': t_grid_event,
+                'mag': mag_fade,
+                # 'rise_time_days': rise_time_days,
+                'fade_time_days': total_duration
+            }
+            flux_g_quiescent = 10 ** (-0.4 * quiescent)
+            flux_g_peak = 10 ** (-0.4 * peak_mag) 
+            
+            if i<10:
+                print("initial light curve filter (g): ")
+                print(lc[f])
+                print("flux g  q ", flux_g_quiescent)
+                print("flux g peak ", flux_g_peak)
+
             
             for f in self.filts:
-                qmin, qmax = QUIESCENT_MAG_RANGES[f]
-                quiescent = rng.uniform(qmin, qmax) 
-            
-                # Peak brightness
-                peak_mag = quiescent - rng.uniform(0.7, 1.0)
-            
-                # Rise: steep brightening to peak
-                rise_rate = rng.uniform(5, 15)
-                mag_rise = peak_mag - rise_rate * (t_rise - np.min(t_rise)) / np.ptp(t_rise)
-            
-                # Fade: instant from peak and over `t_fade`
-                fade_rate = rng.uniform(8, 20)
-                mag_fade = peak_mag + fade_rate * (t_fade / total_duration)
-            
-                # Combine: rise + fade
-                mag_f = np.concatenate([mag_rise, mag_fade])
-            
-                lc[f] = {
-                    'ph': t_grid_event,
-                    'mag': mag_f,
-                    'rise_time_days': rise_time_days,
-                    'fade_time_days': fade_time_days
-                }
+                flux_f_quiescent = flux_g_quiescent * self.ratios_quiescent[f]
+                flux_f_peak = flux_g_peak * self.ratios_peak[f]
+                mag_f_quiescent = -2.5 * np.log10(flux_f_quiescent)
+                mag_f_peak = -2.5 * np.log10(flux_f_peak)
+                lc[f] = {'ph': t_grid_event, 'mag': np.array([mag_f_peak,mag_f_quiescent])}
+                if i<10:
+                    print("lc in ",f,": ",lc[f])
 
             self.data.append(lc)
 
@@ -400,6 +442,7 @@ class Base_Metric(BaseMetric):
         self.filter_include = filter_include
         self.use_extinction = use_extinction
         self.extinction_printed = False
+        self.use_kcorrect = use_kcorrect
 
         cols = [mjdCol, m5Col, filterCol, nightCol]
         super().__init__(col=cols, metric_name=metricName, units='Detection Efficiency', badval=badval, **kwargs)
@@ -407,48 +450,46 @@ class Base_Metric(BaseMetric):
 
     def detect(self, filters, snr, times, obs_record):
         """
-        Detection Criteria:
-
-        Option A:  ≥3 detections ≥3σ  AND  ≥1 detection ≥5σ, All within 0.5 days
+        Minimum Detection Criteria: just one detection at all
+        potentially add error
         
-        Option B:  ≥2 detections ≥5σ  AND  separated by ≥15 min (0.0104 days)
-        
-        If either condition is met, detected = True
-        Else, detected = False
         """
         detected = False
     
-        filters = np.array(filters)
+        # filters = np.array(filters)
         snr = np.array(snr)
-        times = np.array(times)
+        # times = np.array(times)
     
-        idx_3sigma = snr >= 3
+        # idx_3sigma = snr >= 3
         idx_5sigma = snr >= 5
     
-        # Option A: 3x3σ detections with at least one 5σ, all within 0.5 days - VERY STRINGENT
-        if np.sum(idx_3sigma) >= 3:
-            t_detected = times[idx_3sigma]
-            if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
-                detected = True
+        # # Option A: 3x3σ detections with at least one 5σ, all within 0.5 days - VERY STRINGENT
+        # if np.sum(idx_3sigma) >= 3:
+        #     t_detected = times[idx_3sigma]
+        #     if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
+        #         detected = True
     
-        # Option B: truly transient fallback — ≥2x5σ detections ≥15 min apart - VERY STRINGENT
-        elif np.sum(idx_5sigma) >= 2:
-            t_detected = times[idx_5sigma]
-            if np.ptp(t_detected) >= 0.0104:  # 15 minutes
-                detected = True
+        # # Option B: truly transient fallback — ≥2x5σ detections ≥15 min apart - VERY STRINGENT
+        # elif np.sum(idx_5sigma) >= 2:
+        #     t_detected = times[idx_5sigma]
+        #     if np.ptp(t_detected) >= 0.0104:  # 15 minutes
+        #         detected = True
 
-        # Option C: Short-timescale detection (relaxed) 
-        # ≥3 detections ≥3σ within 3 days, at least one ≥5σ
-        if np.sum(idx_3sigma) >= 3:
-            t_detected = times[idx_3sigma]
-            if np.ptp(t_detected) <= 3.0 and np.any(idx_5sigma):  # was 0.5 days
-                detected = True
+        # # Option C: Short-timescale detection (relaxed) 
+        # # ≥3 detections ≥3σ within 3 days, at least one ≥5σ
+        # if np.sum(idx_3sigma) >= 3:
+        #     t_detected = times[idx_3sigma]
+        #     if np.ptp(t_detected) <= 3.0 and np.any(idx_5sigma):  # was 0.5 days
+        #         detected = True
     
-        # Option D: Strong detections over survey timescale 
-        # ≥2 detections ≥5σ in ANY two epochs (no strict same-night requirement)
-        elif np.sum(idx_5sigma) >= 2:
-            detected = True 
+        # # Option D: Strong detections over survey timescale 
+        # # ≥2 detections ≥5σ in ANY two epochs (no strict same-night requirement)
+        # elif np.sum(idx_5sigma) >= 2:
+        #     detected = True 
 
+        #shar sept
+        if np.sum(idx_5sigma)>0:
+            detected=True
     
         return detected
 
@@ -533,49 +574,81 @@ class Detect_Metric(Base_Metric):
         return 1.0 if detected else 0.0
 
 
-# # --------------------------------------------
-# # Characterization Metric for M Dwarf Flares
-# # --------------------------------------------
-# class MDwarfFlareCharacterizeMetric(Base_Metric):
-#     """
-#     M Dwarf Flare Characterization Metric
+# --------------------------------------------
+# Characterization Metric for M Dwarf Flares
+# --------------------------------------------
+class MDwarfFlareSilverMetric(Base_Metric):
+    """
+    M Dwarf Flare Silver Characterization Metric
 
-#     This metric evaluates whether Rubin observations of an M Dwarf flare contain
-#     sufficient information to distinguish between classical and complex (multi-peaked) profiles.
+    Can we get two data points, the first one within 1/e timescales? 
+    """
+    def __init__(self, **kwargs):
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(**kwargs, use_extinction=use_extinction)
+        self.metricName = kwargs.get('metricName', 'MDwarf_Silver')
+        self.obs_records = {}
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
-#     Characterization logic:
-#     - Identify flare detections above 0.5σ (used to define flare start/stop time).
-#     - Require at least 4 such detections for any characterization.
-    
-#     TBD ??  
-#     """
-#     def __init__(self, **kwargs):
-#         use_extinction = kwargs.pop('use_extinction', True)
-#         super().__init__(**kwargs, use_extinction=use_extinction)
-#         self.metricName = kwargs.get('metricName', 'MDwarf_Characterize')
-#         self.obs_records = {}
-#         self.parent_instance = Base_Metric(use_extinction=use_extinction)
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
 
-#     def run(self, dataSlice, slice_point=None):
-#         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-#         detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        if np.sum(detected)<2: #shar sept
+            return 0.0
 
-#         if not detected:
-#             return 0.0
+        #todo: implement 1/e timescale criterion
+        # #this is in survey time not mjd
+        t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time'] 
+        t_end   = self.lc_model.data[slice_point['file_indx']][f]['ph'][1] + slice_point['peak_time']
+        duration = t_end - t_start
 
-#         # Step 1: Require ≥4 points above 0.5σ
-#         above_half_sigma = snr >= 0.5
-#         if np.sum(above_half_sigma) < 4:
-#             return 0.0
+        times_good = times[snr > 5]
+        if np.any(times_good) < (t_start + duration/np.e):
+            return 1.0
+            
 
-#         # Step 2: Check for complexity via ≥2 peaks above 1.5σ, separated by ≥0.1 day
-#         above_onefive_sigma = snr >= 1.5
-#         t_peak = times[above_onefive_sigma]
-#         if len(t_peak) >= 2 and np.ptp(t_peak) >= 0.1:
-#             return 1.0  # Complex flare
+        return 0.0
+        
+# --------------------------------------------
+# Gold Metric for M Dwarf Flares
+# --------------------------------------------
+class MDwarfFlareGoldMetric(Base_Metric): #shar sept
+    """
+    M Dwarf Flare Characterization Metric
 
-#         return 0.5  # Classical flare
+    Can we get two data points in the same filter, the first one within 1/e timescales? 
+    """
+    def __init__(self, **kwargs):
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(**kwargs, use_extinction=use_extinction)
+        self.metricName = kwargs.get('metricName', 'MDwarf_Gold')
+        self.obs_records = {}
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+
+        if np.sum(detected)<2: #shar sept
+            return 0.0
+            
+        t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time'] 
+        t_end   = self.lc_model.data[slice_point['file_indx']][f]['ph'][1] + slice_point['peak_time']
+        duration = t_end - t_start
+        
+        for f in np.unique(filters):
+            mask = filters == f
+            snr_in_filter = snr[mask]
+            if np.sum(snr_in_filter>5)<2:
+                return 0.0
+            times_in_filter = times[mask]
+            observed_detection_times = times_in_filter[snr_in_filter >= 5]
+            if np.any(observed_detection_times) < (t_start + duration/np.e):
+                return 1.0
+            
+
+        return 0.0
 
 # --------------------------------------------
 # Multi_Metric Standardized Call
@@ -585,8 +658,9 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
     Return a list of metrics. `include` can be a list of metric names to include.
     """
     all_metrics = {
-        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
-        # 'characterize': MDwarfFlareCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=False),
+        'silver': MDwarfFlareSilverMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=False),
+        'gold': MDwarfFlareGoldMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=False)
     }
 
     if include is None:
