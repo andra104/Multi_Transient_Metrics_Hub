@@ -541,13 +541,3 @@ def get_multi_metrics(lc_model, use_kcorrect, include=None, use_extinction=True,
         return list(all_metrics.values())
     else:
         return [all_metrics[name] for name in include if name in all_metrics]
-
-
-
-
-
-
-
-
-
-    
