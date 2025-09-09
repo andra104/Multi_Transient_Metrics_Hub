@@ -498,33 +498,36 @@ class Base_Metric(BaseMetric):
         snr = np.array(snr)
         times = np.array(times)
     
-        idx_3sigma = snr >= 3
+        # idx_3sigma = snr >= 3
         idx_5sigma = snr >= 5
     
-        # Option A: 3x3σ detections with at least one 5σ, all within 0.5 days - VERY STRINGENT
-        if np.sum(idx_3sigma) >= 3:
-            t_detected = times[idx_3sigma]
-            if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
-                detected = True
+        # # Option A: 3x3σ detections with at least one 5σ, all within 0.5 days - VERY STRINGENT
+        # if np.sum(idx_3sigma) >= 3:
+        #     t_detected = times[idx_3sigma]
+        #     if np.ptp(t_detected) <= 0.5 and np.any(idx_5sigma):
+        #         detected = True
     
-        # Option B: truly transient fallback — ≥2x5σ detections ≥15 min apart - VERY STRINGENT
-        elif np.sum(idx_5sigma) >= 2:
-            t_detected = times[idx_5sigma]
-            if np.ptp(t_detected) >= 0.0104:  # 15 minutes
-                detected = True
+        # # Option B: truly transient fallback — ≥2x5σ detections ≥15 min apart - VERY STRINGENT
+        # elif np.sum(idx_5sigma) >= 2:
+        #     t_detected = times[idx_5sigma]
+        #     if np.ptp(t_detected) >= 0.0104:  # 15 minutes
+        #         detected = True
 
-        # Option C: Short-timescale detection (relaxed) 
-        # ≥3 detections ≥3σ within 3 days, at least one ≥5σ
-        if np.sum(idx_3sigma) >= 3:
-            t_detected = times[idx_3sigma]
-            if np.ptp(t_detected) <= 3.0 and np.any(idx_5sigma):  # was 0.5 days
-                detected = True
+        # # Option C: Short-timescale detection (relaxed) 
+        # # ≥3 detections ≥3σ within 3 days, at least one ≥5σ
+        # if np.sum(idx_3sigma) >= 3:
+        #     t_detected = times[idx_3sigma]
+        #     if np.ptp(t_detected) <= 3.0 and np.any(idx_5sigma):  # was 0.5 days
+        #         detected = True
     
-        # Option D: Strong detections over survey timescale 
-        # ≥2 detections ≥5σ in ANY two epochs (no strict same-night requirement)
-        elif np.sum(idx_5sigma) >= 2:
-            detected = True 
+        # # Option D: Strong detections over survey timescale 
+        # # ≥2 detections ≥5σ in ANY two epochs (no strict same-night requirement)
+        # elif np.sum(idx_5sigma) >= 2:
+        #     detected = True 
 
+        #shar sept
+        if np.sum(idx_5sigma)>0:
+            detected=True
     
         return detected
 
@@ -618,49 +621,81 @@ class Detect_Metric(Base_Metric):
         return 1.0 if detected else 0.0
 
 
-# # --------------------------------------------
-# # Characterization Metric for M Dwarf Flares
-# # --------------------------------------------
-# class MDwarfFlareCharacterizeMetric(Base_Metric):
-#     """
-#     M Dwarf Flare Characterization Metric
+# --------------------------------------------
+# Characterization Metric for M Dwarf Flares
+# --------------------------------------------
+class MDwarfFlareSilverMetric(Base_Metric):
+    """
+    M Dwarf Flare Silver Characterization Metric
 
-#     This metric evaluates whether Rubin observations of an M Dwarf flare contain
-#     sufficient information to distinguish between classical and complex (multi-peaked) profiles.
+    Can we get two data points, the first one within 1/e timescales? 
+    """
+    def __init__(self, **kwargs):
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(**kwargs, use_extinction=use_extinction)
+        self.metricName = kwargs.get('metricName', 'MDwarf_Silver')
+        self.obs_records = {}
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
-#     Characterization logic:
-#     - Identify flare detections above 0.5σ (used to define flare start/stop time).
-#     - Require at least 4 such detections for any characterization.
-    
-#     TBD ??  
-#     """
-#     def __init__(self, **kwargs):
-#         use_extinction = kwargs.pop('use_extinction', True)
-#         super().__init__(**kwargs, use_extinction=use_extinction)
-#         self.metricName = kwargs.get('metricName', 'MDwarf_Characterize')
-#         self.obs_records = {}
-#         self.parent_instance = Base_Metric(use_extinction=use_extinction)
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
 
-#     def run(self, dataSlice, slice_point=None):
-#         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-#         detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        if np.sum(detected)<2: #shar sept
+            return 0.0
 
-#         if not detected:
-#             return 0.0
+        #todo: implement 1/e timescale criterion
+        # #this is in survey time not mjd
+        t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time'] 
+        t_end   = self.lc_model.data[slice_point['file_indx']][f]['ph'][:-1] + slice_point['peak_time']
+        duration = t_end - t_start
 
-#         # Step 1: Require ≥4 points above 0.5σ
-#         above_half_sigma = snr >= 0.5
-#         if np.sum(above_half_sigma) < 4:
-#             return 0.0
+        times_good = times[snr > 5]
+        if np.any(times_good) < (t_start + duration/np.e):
+            return 1.0
+            
 
-#         # Step 2: Check for complexity via ≥2 peaks above 1.5σ, separated by ≥0.1 day
-#         above_onefive_sigma = snr >= 1.5
-#         t_peak = times[above_onefive_sigma]
-#         if len(t_peak) >= 2 and np.ptp(t_peak) >= 0.1:
-#             return 1.0  # Complex flare
+        return 0.0
+        
+# --------------------------------------------
+# Gold Metric for M Dwarf Flares
+# --------------------------------------------
+class MDwarfFlareGoldMetric(Base_Metric): #shar sept
+    """
+    M Dwarf Flare Characterization Metric
 
-#         return 0.5  # Classical flare
+    Can we get two data points in the same filter, the first one within 1/e timescales? 
+    """
+    def __init__(self, **kwargs):
+        use_extinction = kwargs.pop('use_extinction', True)
+        super().__init__(**kwargs, use_extinction=use_extinction)
+        self.metricName = kwargs.get('metricName', 'MDwarf_Gold')
+        self.obs_records = {}
+        self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+
+        if np.sum(detected)<2: #shar sept
+            return 0.0
+            
+        t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time'] 
+        t_end   = self.lc_model.data[slice_point['file_indx']][f]['ph'][:-1] + slice_point['peak_time']
+        duration = t_end - t_start
+        
+        for f in np.unique(filters):
+            mask = filters == f
+            snr_in_filter = snr[mask]
+            if np.sum(snr_in_filter>5)<2:
+                return 0.0
+            times_in_filter = times[mask]
+            observed_detection_times = times_in_filter[snr_in_filter >= 5]
+            if np.any(observed_detection_times) < (t_start + duration/np.e):
+                return 1.0
+            
+
+        return 0.0
 
 # --------------------------------------------
 # Multi_Metric Standardized Call
@@ -670,13 +705,13 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True):
     Return a list of metrics. `include` can be a list of metric names to include.
     """
     all_metrics = {
-        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction),
-        # 'characterize': MDwarfFlareCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction),
+        'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=False),
+        'silver': MDwarfFlareSilverMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=False),
+        'gold': MDwarfFlareGoldMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=False)
     }
 
     if include is None:
         return list(all_metrics.values())
     else:
         return [all_metrics[name] for name in include if name in all_metrics]
-
 
