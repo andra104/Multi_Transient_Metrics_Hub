@@ -263,8 +263,23 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
                     print(f" | length: {len(val)}")
                 except TypeError:
                     print(f" | value: {val}")
+        #9/10
+        #df_obs = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
+        # Build df with SID coming from the dict keys (index)
+        df_obs = (
+            pd.DataFrame.from_dict(detect_metric.obs_records, orient='index')
+              .reset_index()
+              .rename(columns={'index': 'sid'})
+        )
+        
+        # If any metric put its own 'sid' into the obs_record, this will create
+        # duplicate column names. Dedup *keeping the index-derived 'sid'*.
+        if df_obs.columns.duplicated().any():
+            df_obs = df_obs.loc[:, ~df_obs.columns.duplicated(keep='first')]
+        
+        # Normalize type and guarantee 'sid' is a 1-D Series
+        df_obs['sid'] = pd.to_numeric(df_obs['sid'], errors='coerce').astype('Int64')
 
-        df_obs = pd.DataFrame.from_dict(detect_metric.obs_records).T.reset_index().rename(columns={"index": "sid"})
         max_index = len(shared_lc_model.data) - 1
         df_obs = df_obs[df_obs['file_indx'] <= max_index]
         

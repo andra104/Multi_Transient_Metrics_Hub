@@ -594,7 +594,7 @@ class Detect_Metric(Base_Metric):
             'last_det_mjd': last_det_mjd,
             #'rise_time_days': rise_time,
             # 'fade_time_days': fade_time,
-            'sid': slice_point['sid'],
+            'sid_duplicate': slice_point['sid'],
             'file_indx': slice_point['file_indx'],
             'ra': slice_point['ra'],
             'dec': slice_point['dec'],
