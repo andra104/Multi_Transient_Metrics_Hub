@@ -1,474 +1,267 @@
 from rubin_sim.maf.metrics import BaseMetric
-from rubin_sim.maf.slicers import UserPointsSlicer
+
 #from rubin_sim.utils import uniformSphere
 #from rubin_sim.data import get_data_dir
 from rubin_scheduler.data import get_data_dir #local
 from rubin_sim.phot_utils import DustValues
-from rubin_sim.maf.metric_bundles import MetricBundle
-from rubin_sim.maf.utils import m52snr
-import matplotlib.pyplot as plt
-from rubin_sim.maf.db import ResultsDb
+
+import sys
+import os
+sys.path.append(os.path.abspath(".."))
+from shared_utils import equatorialFromGalactic, uniform_sphere_degrees, inject_uniform_healpix, apply_spectral_index, evaluate, compare_flux_diff_to_error
+
+import matplotlib.pyplot as plt 
 from astropy.cosmology import Planck18 as cosmo
 from astropy.coordinates import Galactic, ICRS as ICRSFrame
-from rubin_sim.maf.slicers import HealpixSlicer
-import rubin_sim.maf.metric_bundles as metric_bundles
 from astropy.coordinates import SkyCoord
-from dustmaps.sfd import SFDQuery
-from rubin_sim.maf.metrics import CountMetric
-from rubin_sim.maf.maps import StellarDensityMap
 #from rubin_sim.phot_utils import SFDMap
 import astropy.units as u
 import healpy as hp
+from astropy.cosmology import z_at_value
+from scipy.stats import truncnorm
 import numpy as np
 import glob
 import os
 
 import pickle 
+from pathlib import Path
 
-# --------------------------------------------------
-# Utility: Convert Galactic to Equatorial coordinates
-# --------------------------------------------------
-def equatorialFromGalactic(lon, lat):
-    gal = Galactic(l=lon * u.deg, b=lat * u.deg)
-    equ = gal.transform_to(ICRSFrame())
-    return equ.ra.deg, equ.dec.deg
+DEBUG = False
+# MAXGAP = 1
 
-# -----------------------------------------------------------------------------
-# Local Utility: Uniform sky injection
-# -----------------------------------------------------------------------------
-def uniformSphere(n_points, seed=None):
-    """
-    Generate points uniformly distributed on the surface of a sphere.
 
-    Parameters
-    ----------
-    n_points : int
-        Number of points to generate.
-    seed : int, optional
-        Seed for the random number generator.
-
-    Returns
-    -------
-    ra : ndarray
-        Right Ascension values in degrees.
-    dec : ndarray
-        Declination values in degrees.
-    """
-    rng = np.random.default_rng(seed)
-    eps = 1e-10
-    u = rng.uniform(eps, 1 - eps, n_points)
-    v = rng.uniform(eps, 1 - eps, n_points)
-
-    theta = 2 * np.pi * u
-    phi = np.arccos(2 * v - 1)
-
-    ra = np.degrees(theta)
-    dec = 90 - np.degrees(phi)
-    return ra, dec
-
-    import numpy as np
-import os
-import pickle
+# local_IbnIcn_metric.py
 from rubin_sim.maf.metrics import BaseMetric
-from rubin_sim.maf.slicers import UserPointsSlicer
-from dustmaps.sfd import SFDQuery
-from rubin_sim.maf.utils import m52snr
 from rubin_sim.phot_utils import DustValues
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-import healpy as hp
+import numpy as np, os, pickle
 
-# ---------------------------------------------------------------------
-# Light Curve Parameters
-# ---------------------------------------------------------------------
-INTERACTING_HPSN_PARAMS = {
-    'Icn': {
-        'u': {
-            'rise_rate_mu': 0.18,
-            'rise_rate_sigma': 0.10,
-            'fade_rate_mu': 0.16,
-            'fade_rate_sigma': 0.05,
-            'peak_mag_min': -20.0,
-            'peak_mag_max': -18.5,
-            'duration_at_peak': 4.0
-        },
-        'g': {
-            'rise_rate_mu': 0.27,
-            'rise_rate_sigma': 0.08,
-            'fade_rate_mu': 0.14,
-            'fade_rate_sigma': 0.06,
-            'peak_mag_min': -20.0,
-            'peak_mag_max': -17.0,
-            'duration_at_peak': 4.6
-        },
-        'r': {
-            'rise_rate_mu': 0.24,
-            'rise_rate_sigma': 0.14,
-            'fade_rate_mu': 0.20,
-            'fade_rate_sigma': 0.10,
-            'peak_mag_min': -19.5,
-            'peak_mag_max': -17.0,
-            'duration_at_peak': 3.7
-        },
-        'i': {
-            'rise_rate_mu': 0.21,
-            'rise_rate_sigma': 0.10,
-            'fade_rate_mu': 0.14,
-            'fade_rate_sigma': 0.05,
-            'peak_mag_min': -19.0,
-            'peak_mag_max': -17.0,
-            'duration_at_peak': 5.0
-        },
-        'z': {
-            'rise_rate_mu': 0.13,
-            'rise_rate_sigma': 0.05,
-            'fade_rate_mu': 0.15,
-            'fade_rate_sigma': 0.10,
-            'peak_mag_min': -19.0,
-            'peak_mag_max': -18.0,
-            'duration_at_peak': 5.0
-        }
-    },
-    'Ibn': {
-        'u': {
-            'rise_rate_mu': 0.05,
-            'rise_rate_sigma': 0.01,
-            'fade_rate_mu': 0.12,
-            'fade_rate_sigma': 0.02,
-            'peak_mag_min': 18.29,
-            'peak_mag_max': 18.29,
-            'duration_at_peak': 3.4
-        },
-        'g': {
-            'rise_rate_mu': 0.14,
-            'rise_rate_sigma': 0.03,
-            'fade_rate_mu': 0.12,
-            'fade_rate_sigma': 0.01,
-            'peak_mag_min': 17.18,
-            'peak_mag_max': 18.84,
-            'duration_at_peak': 2.3
-        },
-        'r': {
-            'rise_rate_mu': 0.11,
-            'rise_rate_sigma': 0.08,
-            'fade_rate_mu': 0.13,
-            'fade_rate_sigma': 0.01,
-            'peak_mag_min': 14.36,
-            'peak_mag_max': 18.95,
-            'duration_at_peak': 3.17
-        },
-        'i': {
-            'rise_rate_mu': 0.04,
-            'rise_rate_sigma': 0.02,
-            'fade_rate_mu': 0.12,
-            'fade_rate_sigma': 0.03,
-            'peak_mag_min': 14.37,
-            'peak_mag_max': 19.14,
-            'duration_at_peak': 3.0
-        }
-    }
-}
+# pull shared helpers (don’t reimplement)
+from shared_utils import evaluate, compare_flux_diff_to_error
 
-
-# ---------------------------------------------------------------------
-# Light Curve Generator for Interacting H-poor SNe
-# ---------------------------------------------------------------------
-class InteractingHPSN_LC:
-    def __init__(self, num_samples=100, save_to=None, load_from=None):
-        """
-        Initialize the Interacting H-poor SN light curve generator.
-
-        Parameters
-        ----------
-        num_samples : int
-            Number of samples per phase segment.
-        save_to : str or None
-            If provided, saves generated templates to this pickle file.
-        load_from : str or None
-            If provided and file exists, loads templates instead of regenerating.
-        """
-        self.num_samples = num_samples
-        self.filts = []
-        self.templates = {'Ibn': [], 'Icn': []}
-
+# --------------------------
+# LC families (Icn / Ibn)
+# --------------------------
+class LC_Icn:
+    def __init__(self, num_samples=200, num_lightcurves=1000, load_from=None):
+        self.filts = ['u','g','r','i','z','y']
+        self.data, self.t_grid = [], None
+        self.ratios = {'u':0.47,'g':1.0,'r':0.44,'i':0.204,'z':0.097,'y':0.035}
         if load_from and os.path.exists(load_from):
-            with open(load_from, 'rb') as f:
-                self.templates = pickle.load(f)
-            print(f"Loaded InteractingHPSN light curves from {load_from}")
-        else:
-            for sn_type in self.templates:
-                for _ in range(100):
-                    self.templates[sn_type].append(self.generate_template(sn_type))
-            if save_to:
-                with open(save_to, 'wb') as f:
-                    pickle.dump(self.templates, f)
-                print(f"Saved 100 {sn_type} light curve templates to {save_to}")
+            with open(load_from,'rb') as f: obj = pickle.load(f)
+            self.data, self.t_grid = obj['lightcurves'], obj.get('t_grid')
+            print(f"Loaded Icn templates from {load_from}")
+            return
+        rng = np.random.default_rng(123)
+        for _ in range(num_lightcurves):
+            m_peak_g   = rng.uniform(-20.0, -17.0)      # g ~ -17..-20
+            alpha_rise = rng.uniform(0.6, 1.6)          # ≈ 0.2–0.3 mag/day near peak
+            alpha_fade = rng.uniform(0.4, 1.0)          # ≈ 0.14 mag/day
+            A = 10**(0.3/alpha_rise)-1.0; B = 10**(0.3/alpha_fade)-1.0
+            t_eps = float(np.clip( np.random.uniform(6,10) / max(A+B,1e-3), 0.05, 5.0))
+            t_pre, t_post = -max(5*t_eps,0.5), max(10*t_eps,10.0)
+            self.t_grid = np.linspace(t_pre, t_post, num_samples)
+            t = self.t_grid
+            mag_g = np.empty_like(t); pre = t<0
+            mag_g[pre]  = m_peak_g + 2.5*alpha_rise*np.log10((np.abs(t[pre])+t_eps)/t_eps)
+            mag_g[~pre] = m_peak_g + 2.5*alpha_fade*np.log10((t[~pre]+t_eps)/t_eps)
+            flux_g = 10**(-0.4*mag_g)
+            lc = {}
+            for f in self.filts:
+                flux_f = flux_g * self.ratios[f]
+                lc[f]  = {'ph': self.t_grid, 'mag': -2.5*np.log10(flux_f)}
+            self.data.append(lc)
+    def interp(self, t, f, i=0):
+        ph  = np.asarray(self.data[i][f]['ph'], float)
+        mag = np.asarray(self.data[i][f]['mag'], float)
+        t   = np.asarray(t, float)
+        out = np.interp(t, ph, mag, left=np.nan, right=np.nan)
+        out[(t<ph.min())|(t>ph.max())] = np.nan
+        return out
 
-    def generate_template(self, sn_type):
-        """
-        Generate a light curve template for a given SN type.
+class LC_Ibn:
+    def __init__(self, num_samples=200, num_lightcurves=1000, load_from=None):
+        self.filts = ['u','g','r','i','z','y']
+        self.data, self.t_grid = [], None
+        self.ratios = {'u':0.47,'g':1.0,'r':0.44,'i':0.204,'z':0.097,'y':0.035}
+        if load_from and os.path.exists(load_from):
+            with open(load_from,'rb') as f: obj = pickle.load(f)
+            self.data, self.t_grid = obj['lightcurves'], obj.get('t_grid')
+            print(f"Loaded Ibn templates from {load_from}")
+            return
+        rng = np.random.default_rng(456)
+        for _ in range(num_lightcurves):
+            m_peak_g   = rng.uniform(-19.5, -17.0)
+            alpha_rise = rng.uniform(0.3, 1.1)          # ≈ 0.1–0.15 mag/day
+            alpha_fade = rng.uniform(0.4, 0.9)          # ≈ 0.12–0.13 mag/day
+            A = 10**(0.3/alpha_rise)-1.0; B = 10**(0.3/alpha_fade)-1.0
+            t_eps = float(np.clip( np.random.uniform(5,8) / max(A+B,1e-3), 0.05, 5.0))
+            t_pre, t_post = -max(5*t_eps,0.5), max(10*t_eps,10.0)
+            self.t_grid = np.linspace(t_pre, t_post, num_samples)
+            t = self.t_grid
+            mag_g = np.empty_like(t); pre = t<0
+            mag_g[pre]  = m_peak_g + 2.5*alpha_rise*np.log10((np.abs(t[pre])+t_eps)/t_eps)
+            mag_g[~pre] = m_peak_g + 2.5*alpha_fade*np.log10((t[~pre]+t_eps)/t_eps)
+            flux_g = 10**(-0.4*mag_g)
+            lc = {}
+            for f in self.filts:
+                flux_f = flux_g * self.ratios[f]
+                lc[f]  = {'ph': self.t_grid, 'mag': -2.5*np.log10(flux_f)}
+            self.data.append(lc)
+    def interp(self, t, f, i=0):
+        ph  = np.asarray(self.data[i][f]['ph'], float)
+        mag = np.asarray(self.data[i][f]['mag'], float)
+        t   = np.asarray(t, float)
+        out = np.interp(t, ph, mag, left=np.nan, right=np.nan)
+        out[(t<ph.min())|(t>ph.max())] = np.nan
+        return out
 
-        Parameters
-        ----------
-        sn_type : str
-            'Ibn' or 'Icn'.
-
-        Returns
-        -------
-        dict
-            Light curve dictionary for each band.
-        """
-        lc = {}
-        self.filts = list(INTERACTING_HPSN_PARAMS[sn_type].keys())
-        for band in self.filts:
-            p = INTERACTING_HPSN_PARAMS[sn_type][band]
-
-            rise_rate = np.random.normal(p['rise_rate_mu'], p['rise_rate_sigma'])
-            fade_rate = np.random.normal(p['fade_rate_mu'], p['fade_rate_sigma'])
-            peak_mag = np.random.uniform(p['peak_mag_min'], p['peak_mag_max'])
-            peak_dur = p['duration_at_peak']
-
-            t_rise = np.linspace(-5, 0, self.num_samples // 3)
-            t_peak = np.linspace(0, peak_dur, self.num_samples // 3)
-            t_fade = np.linspace(peak_dur, peak_dur + 10, self.num_samples // 3)
-
-            mag_rise = peak_mag - rise_rate * (t_rise - np.min(t_rise)) / np.ptp(t_rise)
-            mag_peak = np.full_like(t_peak, peak_mag)
-            mag_fade = peak_mag + fade_rate * (t_fade - t_fade[0])
-
-            times = np.concatenate([t_rise, t_peak, t_fade])
-            mags = np.concatenate([mag_rise, mag_peak, mag_fade])
-            lc[band] = {'ph': times, 'mag': mags}
-        return lc
-
-    def interp(self, t, filtername, lc_template):
-        return np.interp(t, lc_template[filtername]['ph'], lc_template[filtername]['mag'], left=99, right=99)
-
-
-# ---------------------------------------------------------------------
-# Base Metric
-# ---------------------------------------------------------------------
-
-class BaseInteractingHPSNMetric(BaseMetric):
-    def __init__(self, metricName='BaseInteractingHPSNMetric',
+# --------------------------
+# Thin Base_Metric (reuses shared_utils.evaluate)
+# --------------------------
+class Base_Metric(BaseMetric):
+    def __init__(self, metricName='BaseIbnIcn', 
                  mjdCol='observationStartMJD', m5Col='fiveSigmaDepth',
-                 filterCol='filter', nightCol='night',
-                 outputLc=False, badval=-666, **kwargs):
-        """
-        Base class for Interacting H-poor SN metric evaluation logic.
-
-        Parameters
-        ----------
-        outputLc : bool
-            If True, returns matched light curves.
-        """
-        self.outputLc = outputLc
-        self.ax1 = DustValues().ax1  # Extinction coefficient per filter
-
+                 filterCol='filter', nightCol='night', mjd0=60980.5,
+                 lc_model=None, use_extinction=True, use_kcorrect=True,
+                 k_correct_type=None, k_correct_arg=None,
+                 filter_include=None, badval=-666, **kwargs):
+        self.ax1 = DustValues().ax1
+        self.mjdCol, self.m5Col = mjdCol, m5Col
+        self.filterCol, self.nightCol = filterCol, nightCol
+        self.mjd0 = mjd0
+        self.lc_model = lc_model
+        self.use_extinction = use_extinction
+        self.use_kcorrect = use_kcorrect
+        self.k_correct_type = k_correct_type
+        self.k_correct_arg  = k_correct_arg
+        self.filter_include = filter_include
         cols = [mjdCol, m5Col, filterCol, nightCol]
-        super().__init__(col=cols, metricName=metricName,
-                         units='Detected (0 or 1)', maps=['DustMap'],
-                         badval=badval, **kwargs)
+        super().__init__(col=cols, metric_name=metricName, units='Detection Efficiency', badval=badval, **kwargs)
 
-    def characterize_hpsn(self, snr, times):
-        """
-        Classify light curve as 'classical', 'ambiguous', or 'uncharacterized'.
+# --------------------------
+# Detection & Characterization
+# --------------------------
+class IbnIcnDetect_Metric(Base_Metric):
+    """Gate A: pre-peak color (≥2 SNR≥10 within 2 hr in different filters)
+       Gate B: peak resolution (≥2 SNR≥5 within |t| ≤ 4 d)
+       Gate C: pre-peak variability (>3σ flux change in any single band)"""
+    def __init__(self, family='icn', **kwargs):
+        super().__init__(**kwargs)
+        self.family = family
+        self.metricName = kwargs.get('metricName', f'{family.upper()}_Detect')
+        self.obs_records = {}
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        if obs_record is None:
+            return self.badval
+        if self.filter_include is not None:
+            keep = np.isin(filters, self.filter_include)
+            snr, filters, times = snr[keep], filters[keep], times[keep]
+            for k in ['mjd_obs','mag_obs','snr_obs','filter']:
+                if isinstance(obs_record.get(k), np.ndarray):
+                    obs_record[k] = obs_record[k][keep]
 
-        Returns
-        -------
-        str
-            Classification string.
-        """
-        rise_window = (-5, 0)
-        peak_window = (0, 5)
-        fade_window = (5, 15)
-
-        rise_pts = np.sum((times >= rise_window[0]) & (times < rise_window[1]) & (snr >= 0.5))
-        peak_pts = np.sum((times >= peak_window[0]) & (times < peak_window[1]) & (snr >= 0.5))
-        fade_pts = np.sum((times >= fade_window[0]) & (times < fade_window[1]) & (snr >= 0.5))
-
-        total = rise_pts + peak_pts + fade_pts
-
-        if rise_pts >= 2 and peak_pts >= 2 and fade_pts >= 1:
-            return 'classical'
-        elif total >= 5:
-            return 'ambiguous'
+        # Gate A (pre-peak color)
+        pre  = times < 0.0
+        good = pre & (snr >= 10)
+        color_ok = False
+        if np.sum(good) >= 2:
+            tg, fg = times[good], np.asarray(filters)[good]
+            color_ok = any((0 < abs(tg[j]-tg[i]) < (2/24)) and (fg[i] != fg[j])
+                           for i in range(len(tg)) for j in range(i+1, len(tg)))
+        if not color_ok:
+            detected = False
         else:
-            return 'uncharacterized'
+            # Gate B (peak resolution)
+            near_peak = (np.abs(times) <= 4.0) & (snr >= 5)
+            detected = np.sum(near_peak) >= 2
+            # Gate C (pre-peak variability)
+            if detected:
+                f_pre = np.asarray(filters)[pre]
+                s_pre = snr[pre]
+                m_pre = np.asarray(obs_record['mag_obs'], float)[pre]
+                var_ok = False
+                for f in np.unique(f_pre):
+                    mask = (f_pre == f) & (s_pre >= 5)
+                    if np.sum(mask) >= 2:
+                        m = m_pre[mask]; s = s_pre[mask]
+                        for i in range(m.size):
+                            sig = compare_flux_diff_to_error(m, m[i], s, s[i], return_bool=False)
+                            if np.size(sig) and np.nanmax(np.atleast_1d(sig)) > 3.0:
+                                var_ok = True; break
+                    if var_ok: break
+                detected = detected and var_ok
 
-    def evaluate(self, dataSlice, slicePoint):
-        """
-        Evaluate interpolated SN light curve against observation data.
+        # pack some diagnostics (same pattern as your other metrics)
+        detected_mask = snr >= 5
+        first_det_mjd = np.min(np.asarray(obs_record['mjd_obs'])[detected_mask]) if np.any(detected_mask) else np.nan
+        last_det_mjd  = np.max(np.asarray(obs_record['mjd_obs'])[detected_mask]) if np.any(detected_mask) else np.nan
+        mags = np.asarray(obs_record['mag_obs'], float); mjds = np.asarray(obs_record['mjd_obs'], float)
+        finite = np.isfinite(mags) & (mags < 90)
+        if np.any(finite):
+            i_rel = np.nanargmin(mags[finite]); i_abs = np.flatnonzero(finite)[i_rel]
+            peak_mag, peak_mjd = float(mags[i_abs]), float(mjds[i_abs])
+        else:
+            peak_mag, peak_mjd = np.nan, np.nan
 
-        Returns
-        -------
-        dict
-            Detection and classification information.
-        """
-        t = dataSlice['observationStartMJD'] - slicePoint['peak_time']
-        mags = np.zeros(t.size, dtype=float)
+        obs_record.update({
+            'first_det_mjd': first_det_mjd, 'last_det_mjd': last_det_mjd,
+            'sid_duplicate': slice_point['sid'], 'file_indx': slice_point['file_indx'],
+            'ra': slice_point['ra'], 'dec': slice_point['dec'],
+            'distance_Mpc': slice_point['distance'], 'ebv': slice_point['ebv'],
+            'peak_mjd_observed': peak_mjd, 'peak_mag_observed': peak_mag,
+            'peak_time': slice_point['peak_time'], 'detected': bool(detected),
+            'mag_obs': np.asarray(obs_record.get('mag_obs', [])).tolist(),
+            'snr_obs': np.asarray(obs_record.get('snr_obs', [])).tolist(),
+            'mjd_obs': np.asarray(obs_record.get('mjd_obs', [])).tolist(),
+            'filter':  np.asarray(obs_record.get('filter',  [])).tolist(),
+            'distance_modulus': slice_point.get('distance_modulus')
+        })
+        self.obs_records[slice_point['sid']] = obs_record
+        self.latest_obs_record = obs_record if detected else None
+        return 1.0 if detected else 0.0
 
-        for i, f in enumerate(dataSlice['filter']):
-            if f in slicePoint['lc']:
-                mags[i] = np.interp(t[i], slicePoint['lc'][f]['ph'], slicePoint['lc'][f]['mag'])
-                mags[i] += self.ax1.get(f, 0) * slicePoint['ebv']
-            else:
-                mags[i] = 99.0
+class IbnIcnCharacterizeMetric(Base_Metric):
+    """≥5 detections (SNR≥5) within ≤20 d:
+       ≥1 on rise (t<0), ≥2 within |t|≤2 d, ≥2 on decline (0<t≤12 d),
+       and ≤4 d cadence in at least one band."""
+    def __init__(self, family='icn', **kwargs):
+        super().__init__(**kwargs)
+        self.family = family
+        self.metricName = kwargs.get('metricName', f'{family.upper()}_Characterize')
+    def run(self, dataSlice, slice_point=None):
+        snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
+        good = snr >= 5
+        if np.sum(good) < 5:
+            return 0.0
+        t = times[good]; f = np.asarray(filters)[good]
+        if (np.nanmax(t) - np.nanmin(t)) > 20.0:
+            return 0.0
+        have_rise = np.any(t < 0.0)
+        at_peak   = np.sum(np.abs(t) <= 2.0) >= 2
+        have_decl = np.sum((t > 0.0) & (t <= 12.0)) >= 2
+        cadence_ok = False
+        for band in np.unique(f):
+            tt = np.sort(t[f == band])
+            if tt.size >= 2 and np.nanmax(np.diff(tt)) <= 4.0:
+                cadence_ok = True; break
+        return 1.0 if (have_rise and at_peak and have_decl and cadence_ok) else 0.0
 
-        snr = m52snr(mags, dataSlice['fiveSigmaDepth'])
-        classification = self.characterize_hpsn(snr, t)
-
-        return {
-            't': t,
-            'snr': snr,
-            'mags': mags,
-            'classification': classification
-        }
-
-# ---------------------------------------------------------------------
-# Metric Subclasses
-# ---------------------------------------------------------------------
-class InteractingHPSN_DetectMetric(BaseInteractingHPSNMetric):
-    def run(self, dataSlice, slicePoint):
-        result = self.evaluate(dataSlice, slicePoint)
-        return int(np.sum(result['snr'] >= 5) >= 2)
-
-class InteractingHPSN_ClassicalMetric(BaseInteractingHPSNMetric):
-    def run(self, dataSlice, slicePoint):
-        result = self.evaluate(dataSlice, slicePoint)
-        return 1 if result['classification'] == 'classical' else 0
-
-class InteractingHPSN_AmbiguousMetric(BaseInteractingHPSNMetric):
-    def run(self, dataSlice, slicePoint):
-        result = self.evaluate(dataSlice, slicePoint)
-        return 1 if result['classification'] == 'ambiguous' else 0
-
-class InteractingHPSN_UncharacterizedMetric(BaseInteractingHPSNMetric):
-    def run(self, dataSlice, slicePoint):
-        result = self.evaluate(dataSlice, slicePoint)
-        return 1 if result['classification'] == 'uncharacterized' else 0
-
-class InteractingHPSN_SeparabilityMetric(BaseInteractingHPSNMetric):
-    def __init__(self, *args, **kwargs):
-        super().__init__(metricName='InteractingHPSN_Separability', *args, **kwargs)
-
-    def run(self, dataSlice, slicePoint):
-        result = self.evaluate(dataSlice, slicePoint)
-        t = result['t']
-        snr = result['snr']
-
-        # Identify times when both g and r filters were observed
-        g_inds = np.where(dataSlice['filter'] == 'g')[0]
-        r_inds = np.where(dataSlice['filter'] == 'r')[0]
-
-        if len(g_inds) < 2 or len(r_inds) < 2:
-            return 0
-
-        t_g = t[g_inds]
-        t_r = t[r_inds]
-        mags_g = result['mags'][g_inds]
-        mags_r = result['mags'][r_inds]
-
-        # Match closest times between g and r
-        common_t = np.intersect1d(np.round(t_g, 1), np.round(t_r, 1))
-        if len(common_t) < 2:
-            return 0
-
-        matched_g = [mags_g[np.argmin(np.abs(t_g - ct))] for ct in common_t]
-        matched_r = [mags_r[np.argmin(np.abs(t_r - ct))] for ct in common_t]
-        color = np.array(matched_g) - np.array(matched_r)
-
-        try:
-            slope = np.polyfit(common_t, color, 1)[0]
-            return int(abs(slope) > 0.02)
-        except:
-            return 0
-
-class InteractingHPSN_TriggerableMetric(BaseInteractingHPSNMetric):
-    def __init__(self, *args, **kwargs):
-        super().__init__(metricName='InteractingHPSN_Triggerable', *args, **kwargs)
-
-    def run(self, dataSlice, slicePoint):
-        result = self.evaluate(dataSlice, slicePoint)
-        t = result['t']
-        snr = result['snr']
-
-        # Trigger criteria: ≥2 filters with SNR ≥ 5 within 0.5 days
-        filters = np.array(dataSlice['filter'])
-        trigger_epochs = {}
-
-        for i in range(len(t)):
-            if snr[i] >= 5:
-                epoch = np.floor(t[i] * 2) / 2  # Round to nearest 0.5 days
-                if epoch not in trigger_epochs:
-                    trigger_epochs[epoch] = set()
-                trigger_epochs[epoch].add(filters[i])
-
-        for filtset in trigger_epochs.values():
-            if len(filtset) >= 2:
-                return 1
-
-        return 0
-
-
-# ---------------------------------------------------------------------
-# Population Generator for Interacting HPSN + automatic light curve injection
-# ---------------------------------------------------------------------
-def generateInteractingHPSNSlicer(prob_map, lc_generator, nside=64, t_start=1, t_end=3652,
-                                  rate_per_year=6000, d_min=10, d_max=300,
-                                  icn_fraction=0.05, gal_lat_cut=None, seed=42,
-                                  save_to=None):
-    from astropy.coordinates import SkyCoord
-    from dustmaps.sfd import SFDQuery
-    from rubin_sim.maf.slicers import UserPointsSlicer
-    import astropy.units as u
-
-    rng = np.random.default_rng(seed)
-    n_years = (t_end - t_start) / 365.25
-    n_events = int(rate_per_year * n_years)
-    print(f"Generating {n_events} InteractingHPSN events")
-
-    hp_indices = rng.choice(len(prob_map), size=n_events, p=prob_map)
-    theta, phi = hp.pix2ang(nside, hp_indices, nest=False)
-    ra = np.degrees(phi)
-    dec = 90.0 - np.degrees(theta)
-
-    coords = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
-    if gal_lat_cut is not None:
-        b = coords.galactic.b.deg
-        mask = np.abs(b) > gal_lat_cut
-        coords = coords[mask]
-
-    distances = rng.uniform(d_min, d_max, len(coords))
-    peak_times = rng.uniform(t_start, t_end, len(coords))
-    subtypes = rng.choice(['Ibn', 'Icn'], p=[1 - icn_fraction, icn_fraction], size=len(coords))
-    ebv = SFDQuery()(coords)
-
-    slicer = UserPointsSlicer(ra=coords.ra.deg, dec=coords.dec.deg)
-    slicer.slice_points['ra'] = coords.ra.deg
-    slicer.slice_points['dec'] = coords.dec.deg
-    slicer.slice_points['distance'] = distances
-    slicer.slice_points['peak_time'] = peak_times
-    slicer.slice_points['type'] = subtypes
-    slicer.slice_points['ebv'] = ebv
-    slicer.slice_points['sid'] = hp.ang2pix(nside, theta, phi, nest=False)
-    slicer.slice_points['nside'] = nside
-
-    # Attach light curves from generator
-    attach_interacting_lcs_to_slicer(slicer, lc_generator)
-
-    if save_to:
-        with open(save_to, 'wb') as f:
-            pickle.dump(dict(slicer.slice_points), f)
-        print(f"Saved population to {save_to}")
-    # Save the light curve templates used
-    if save_to:
-        template_file = os.path.splitext(save_to)[0] + "_templates.pkl"
-        with open(template_file, 'wb') as f:
-            pickle.dump(lc_generator.templates, f)
-        print(f"Saved light curve templates to {template_file}")
-
-
-    return slicer
+# --------------------------
+# Factory
+# --------------------------
+def get_multi_metrics(lc_model, include=None, use_extinction=True, use_kcorrect=True,
+                      k_correct_type=None, k_correct_arg=None, family='icn'):
+    all_metrics = {
+        f'{family}_detect': IbnIcnDetect_Metric(family=family, lc_model=lc_model,
+                            use_extinction=use_extinction, use_kcorrect=use_kcorrect,
+                            k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
+        f'{family}_char'  : IbnIcnCharacterizeMetric(family=family, lc_model=lc_model,
+                            use_extinction=use_extinction, use_kcorrect=use_kcorrect,
+                            k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
+    }
+    if include is None:
+        return list(all_metrics.values())
+    return [all_metrics[name] for name in include if name in all_metrics]
 
 

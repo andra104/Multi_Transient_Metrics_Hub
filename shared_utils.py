@@ -93,8 +93,11 @@ def inject_uniform_healpix(nside, n_events, seed=42):
 # Plotting light curves from pkl file
 # --------------------------------------------
 
-def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time=True, plot_overlap=False, ylim=None):
+def plot_template_lcs(templates_file, num=3, use_log_time=True, plot_overlap=False, ylim=None):
     '''
+    Plot LC templates from a pickle. If plot_overlap=True, all requested templates
+    are drawn on a single figure and the title lists every included template ID.
+    ----------
     Parameters
     ----------
     templates_file : str
@@ -108,11 +111,18 @@ def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time=True, plot_overla
     ylim : tuple or None
         y-axis limits as (ymin, ymax). If None, don't set.
     '''
+
     lcdict = pickle.load(open(templates_file, "rb"))
     filters = ['u', 'g', 'r', 'i', 'z', 'y']
     colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
 
-    for i in range(num):
+    n_avail = len(lcdict["lightcurves"])
+    n_plot = min(num, n_avail)
+
+    if plot_overlap:
+        plt.figure()
+
+    for i in range(n_plot):
         if not plot_overlap:
             plt.figure()
 
@@ -125,23 +135,34 @@ def plot_some_lcs_from_pkl(templates_file, num=3, use_log_time=True, plot_overla
                 time_vals,
                 lcdict["lightcurves"][i][f]['mag'],
                 color=colors[f],
-                label=f if i == 0 else None,
+                label=f if i == 0 else None,   # show filter legend once when overlapping
                 alpha=0.5
             )
 
-        plt.title(f"Light Curve Template #{i}",size=20)
-        plt.xlabel("Log Time (days)" if use_log_time else "Time (days)",size=15)
-        plt.ylabel("Absolute Mag",size=15)
+        # Titles & axes per-mode
+        if not plot_overlap:
+            plt.title(f"Light Curve Template #{i}", size=20)
+            plt.xlabel("Log Time (days)" if use_log_time else "Time (days)", size=15)
+            plt.ylabel("Absolute Mag", size=15)
+            plt.gca().invert_yaxis()
+            if ylim is not None:
+                plt.ylim(ylim)
+            plt.legend(prop={'size': 15})
+            plt.tight_layout()
+            plt.show()
+
+    if plot_overlap:
+        included_ids = ", ".join(f"#{k}" for k in range(n_plot))
+        plt.title(f"Light Curve Templates {included_ids}", size=20)
+        plt.xlabel("Log Time (days)" if use_log_time else "Time (days)", size=15)
+        plt.ylabel("Absolute Mag", size=15)
         plt.gca().invert_yaxis()
         if ylim is not None:
             plt.ylim(ylim)
         plt.legend(prop={'size': 15})
-
-        if not plot_overlap:
-            plt.show()
-
-    if plot_overlap:
+        plt.tight_layout()
         plt.show()
+
 
 # --------------------------------------------
 # Helper function to apply either redshift or distance (directly)
@@ -1227,21 +1248,29 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     tpl_idx = max(0, min(tpl_idx, len(self.lc_model.data) - 1))
     
     for f in np.unique(filters):
-        idx = np.where(filters == f)[0]
+        idx = np.flatnonzero(filters == f)
         tt  = t[idx]
     
-        vals  = np.full(tt.size, np.nan)
+
+        ph = np.asarray(self.lc_model.data[tpl_idx][f]["ph"], float)
+        tmin, tmax = float(np.nanmin(ph)), float(np.nanmax(ph))
         valid = (tt >= tmin) & (tt <= tmax)
-    
+
+        vals  = np.full(tt.size, np.nan)
+
         if np.any(valid):
             vals[valid] = self.lc_model.interp(tt[valid], f, tpl_idx)
     
         finite = np.isfinite(vals)
         if np.any(finite):
-            A_f = slice_point.get(f'A_{f}', self.ax1[f] * slice_point['ebv'])  # uses precomputed A_f if present
-            K_f = slice_point.get(f'K_{f}', 0.0) if self.use_kcorrect else 0.0 # uses precomputed K_f if present
+            A_f = slice_point.get(f'A_{f}', self.ax1[f]*slice_point['ebv'])
+            A_f = float(np.asarray(A_f))
+            K_f = 0.0
+            if self.use_kcorrect:
+                K_f = float(np.asarray(slice_point.get(f'K_{f}', 0.0)))
             vals[finite] += dm + A_f + K_f
-    
+
+
         mags[idx] = vals
             
         #8/27
@@ -1343,78 +1372,50 @@ def get_kcorrection_powerlaw(z, obs_filter, spectral_index):
     
     return k_corr
 
-
+#9/12 - C
 def get_kcorrection_blackbody(z, obs_filter, temperature):
     """
-    Calculate k-correction for blackbody spectrum.
-    
-    Parameters
-    ----------
-    z : float or array
-        Redshift
-    obs_filter : str
-        Observed filter
-    temperature : float
-        Blackbody temperature in Kelvin
-        
-    Returns
-    -------
-    k_correction : float
-        K-correction in magnitudes
+    K-correction for a blackbody spectrum (Kelvin). Works for scalar/array z,
+    with or without astropy units. Returns scalar if z is scalar.
     """
-    # print(z)
-    # Physical constants
-    h = 6.626e-34  # J⋅s
-    k_b = 1.381e-23  # J/K
-    c = 2.998e8  # m/s
-    
-    # Get observed frequency
+    import numpy as np
+    import astropy.units as u
+
+    # constants
+    h   = 6.626e-34     # J s
+    k_b = 1.381e-23     # J/K
+    c   = 2.998e8       # m/s
+
     nu_obs = FILTER_CENTRAL_FREQS[obs_filter]
-    
-    # Rest-frame frequency being observed
-    nu_rest = nu_obs * (1 + z)
-    
-    # Planck function ratio: B_ν(rest) / B_ν(obs)
-    x_rest = h * nu_rest / (k_b * temperature)
-    # print(x_rest)
-    x_obs = h * nu_obs / (k_b * temperature)
-    
-    if isinstance(z, (list, np.ndarray)):
-        flux_ratio = np.zeros(len(x_rest))
-        # Overflow protection: if x > ~700, exp(x) overflows
-        for i in range(len(x_rest)):
-            if x_rest[i]> 700 or x_obs > 700:
-                # print("using Wien approximation")
-                # Use Wien approximation: B_ν ∝ ν³ exp(-x)
-                flux_ratio[i] = (nu_rest[i]/nu_obs)**3 * np.exp(x_obs - x_rest[i])
-            else:
-                # print("using planck function")
-                planck_rest = nu_rest[i]**3 / (np.exp(x_rest[i]) - 1)
-                planck_obs = nu_obs**3 / (np.exp(x_obs) - 1)
-                flux_ratio[i] = planck_rest / planck_obs
+
+    # normalize z to a plain float array
+    if isinstance(z, u.Quantity):
+        z_val = z.to_value(u.dimensionless_unscaled)
     else:
-        flux_ratio = 0
-        # Overflow protection: if x > ~700, exp(x) overflows
-        if x_rest> 700 or x_obs > 700:
-            # print("using Wien approximation")
-            # Use Wien approximation: B_ν ∝ ν³ exp(-x)
-            flux_ratio = (nu_rest/nu_obs)**3 * np.exp(x_obs - x_rest)
-        else:
-            # print("using planck function")
-            planck_rest = nu_rest**3 / (np.exp(x_rest) - 1)
-            planck_obs = nu_obs**3 / (np.exp(x_obs) - 1)
-            flux_ratio = planck_rest / planck_obs       
+        z_val = z
+    z_arr = np.atleast_1d(np.asarray(z_val, dtype=float))
 
-        
+    # rest-frame frequency sampled by the observed band
+    nu_rest = nu_obs * (1.0 + z_arr)
 
-    
-    # Convert to magnitude difference
-    k_corr = -2.5 * np.log10(flux_ratio)
-    
-    # Add cosmological (1+z) dimming factor
-    k_corr += 2.5 * np.log10(1 + z)
-    # print(k_corr)
-    return k_corr
+    # Planck x ≡ h ν / (k T)
+    x_rest = h * nu_rest / (k_b * float(temperature))
+    x_obs  = h * nu_obs  / (k_b * float(temperature))  # scalar
+
+    # Avoid overflow: Wien approx when x > ~700
+    use_wien = (x_rest > 700) | (x_obs > 700)
+    flux_ratio = np.empty_like(z_arr, dtype=float)
+
+    if np.any(~use_wien):
+        planck_rest = nu_rest[~use_wien]**3 / (np.exp(x_rest[~use_wien]) - 1.0)
+        planck_obs  = (nu_obs**3) / (np.exp(x_obs) - 1.0)
+        flux_ratio[~use_wien] = planck_rest / planck_obs
+
+    if np.any(use_wien):
+        flux_ratio[use_wien] = (nu_rest[use_wien]/nu_obs)**3 * np.exp(x_obs - x_rest[use_wien])
+
+    k_corr = -2.5 * np.log10(flux_ratio) + 2.5 * np.log10(1.0 + z_arr)
+    return float(k_corr[0]) if k_corr.size == 1 else k_corr
 
 
 def apply_kcorrection(z, obs_filter, spectrum_type, k_correct_arg):
@@ -1573,6 +1574,22 @@ def plot_population_lcs(pop_file,
     else:
         sids = _np.array(sids, dtype=int)
 
+    # --- helper to build aggregated title when overlap=True 9/12 ---
+    def _build_overlap_title(sp, sids_arr):
+        sid_str = ", ".join(str(int(s)) for s in sids_arr)
+        idx_str = ", ".join(str(int(_np.asarray(sp['file_indx']).ravel()[s])) for s in sids_arr)
+        dist_str = ", ".join(f"{float(_np.asarray(sp['distance']).ravel()[s]):.0f}" for s in sids_arr)
+        ebv_all = _np.asarray(sp.get('ebv', 0.0))
+        def _get_ebv(s):
+            if _np.isscalar(ebv_all):
+                return float(ebv_all)
+            return float(_np.asarray(ebv_all).ravel()[s])
+        ebv_str = ", ".join(f"{_get_ebv(s):.3f}" for s in sids_arr)
+        return (f"Population LC (apparent): SID {sid_str} | "
+                f"idx={idx_str} | d={dist_str} Mpc | E(B−V)={ebv_str}")
+
+    overlap_title = _build_overlap_title(slice_points, sids)
+
     colors = {'u': 'k', 'g': 'b', 'r': 'g', 'i': 'r', 'z': 'magenta', 'y': 'yellow'}
     ax1 = dust_model.ax1
 
@@ -1614,11 +1631,13 @@ def plot_population_lcs(pop_file,
                 plt.show()
 
         if overlap:
+            plt.title(overlap_title, fontsize=12)
             plt.legend(title="filter", ncol=6, fontsize=9)
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             plt.show()
         return
+
 
     # -------- FULL LC RECONSTRUCTION --------
     if lc_model is None:
@@ -1690,10 +1709,12 @@ def plot_population_lcs(pop_file,
             plt.show()
 
     if overlap:
+        plt.title(overlap_title, fontsize=12)
         plt.legend(title="filter", ncol=6, fontsize=9)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.show()
+
 
 #8/26
 
