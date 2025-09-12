@@ -537,12 +537,15 @@ class Base_Metric(BaseMetric):
 class Detect_Metric(Base_Metric):
     """
     """
-    def __init__(self, **kwargs):
+def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.metricName = kwargs.get('metricName', 'Detect')
-        self.use_kcorrect = False #shar hardcoded
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric()
+        #self.parent_instance = Base_Metric() #causes regen/load
+        
+        # 9/11 
+        self.parent_instance = None  # don't create another Base_Metric
+
 
 
     def run(self, dataSlice, slice_point=None):
@@ -562,7 +565,9 @@ class Detect_Metric(Base_Metric):
                 if isinstance(obs_record[k], np.ndarray):
                     obs_record[k] = obs_record[k][keep]
  
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric
+
     
         detected_mask = snr >= 5
         first_det_mjd = np.nan
@@ -570,6 +575,14 @@ class Detect_Metric(Base_Metric):
         #rise_time = np.nan
         fade_time = np.nan
 
+        # 8/25
+        # per_filter_min_mag = {}
+        # for f in np.unique(obs_record['filter']):
+        #     fmask = (obs_record['filter'] == f)
+        #     if np.any(fmask):
+        #         per_filter_min_mag[f] = float(np.min(obs_record['mag_obs'][fmask]))
+        # obs_record['per_filter_min_mag'] = per_filter_min_mag  # small dict
+        #8/28
         per_filter_min_mag = {}
         for f in np.unique(obs_record['filter']):
             fmask = (obs_record['filter'] == f)
@@ -578,6 +591,7 @@ class Detect_Metric(Base_Metric):
                 good = np.isfinite(vals) & (vals < 90)   # drop sentinels if any
                 per_filter_min_mag[f] = float(np.nanmin(vals[good])) if np.any(good) else np.nan
         obs_record['per_filter_min_mag'] = per_filter_min_mag
+
     
         if np.any(detected_mask):
             first_det_mjd = obs_record['mjd_obs'][detected_mask].min()
@@ -585,15 +599,25 @@ class Detect_Metric(Base_Metric):
             #rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
             fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
     
-        peak_index = np.argmin(obs_record['mag_obs'])
-        peak_mjd = obs_record['mjd_obs'][peak_index] if len(obs_record['mjd_obs']) > 0 else np.nan
-        peak_mag = obs_record['mag_obs'][peak_index] if len(obs_record['mag_obs']) > 0 else np.nan
+        mags = np.asarray(obs_record['mag_obs'], dtype=float)
+        mjds = np.asarray(obs_record['mjd_obs'], dtype=float)
+        
+        finite = np.isfinite(mags) & (mags < 90)  # drop NaNs and 99-style sentinels
+        if np.any(finite):
+            i_rel = np.nanargmin(mags[finite])     # index within finite subset
+            i_abs = np.flatnonzero(finite)[i_rel]  # map back to original index
+            peak_mag = float(mags[i_abs])
+            peak_mjd = float(mjds[i_abs])
+        else:
+            peak_mag = np.nan
+            peak_mjd = np.nan
+
     
         obs_record.update({
             'first_det_mjd': first_det_mjd,
             'last_det_mjd': last_det_mjd,
             #'rise_time_days': rise_time,
-            # 'fade_time_days': fade_time,
+            'fade_time_days': fade_time,
             'sid_duplicate': slice_point['sid'],
             'file_indx': slice_point['file_indx'],
             'ra': slice_point['ra'],
@@ -609,14 +633,12 @@ class Detect_Metric(Base_Metric):
             'mjd_obs': obs_record.get('mjd_obs', np.array([])).tolist(),
             # 'theta_obs': slice_point['theta_obs'],
             'filter': obs_record.get('filter', np.array([])).tolist(),
-            # 'rise_time_model_days': slice_point['rise_time_days'], #shar commenting out cause they done work right now
-            # 'fade_time_model_days': slice_point['fade_time_days'],
-
-            'distance_modulus': 5 * np.log10(slice_point['distance'] * 1e6) - 5
+            'distance_modulus': slice_point.get('distance_modulus')
         })    
 
         self.obs_records[slice_point['sid']] = obs_record
         self.latest_obs_record = obs_record if detected else None
+        
     
         return 1.0 if detected else 0.0
 
@@ -635,12 +657,14 @@ class MDwarfFlareSilverMetric(Base_Metric):
         super().__init__(**kwargs, use_extinction=use_extinction)
         self.metricName = kwargs.get('metricName', 'MDwarf_Silver')
         self.obs_records = {}
-        self.parent_instance = Base_Metric(use_extinction=use_extinction)
+        #self.parent_instance = Base_Metric(use_extinction=use_extinction)
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
-
+        #9/11
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric 
+        
         if np.sum(detected)<2: #shar sept
             return 0.0
 
@@ -675,8 +699,11 @@ class MDwarfFlareGoldMetric(Base_Metric): #shar sept
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
 
+        #9/11
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric
+        
         if np.sum(detected)<2: #shar sept
             return 0.0
             

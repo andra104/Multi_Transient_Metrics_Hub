@@ -243,9 +243,11 @@ class Base_Metric(BaseMetric):
             return detected
         # duration = np.ptp(times[good]) #duration of less than an hour for color
         for time in times[good]:
-            diffs = times[good]-time
-            if np.any(np.abs(diffs)<(1/24)):
+            diffs = np.abs(times[good] - time)
+            if np.any((diffs > 0) & (diffs < (1/24))):
                 detected_part_1 = True
+                break
+
         if detected_part_1 == False:
             return detected 
 
@@ -290,7 +292,11 @@ class Detect_Metric(Base_Metric):
         super().__init__(**kwargs)
         self.metricName = kwargs.get('metricName', 'Detect')
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric()
+        #self.parent_instance = Base_Metric() #causes regen/load
+        
+        # 9/11 
+        self.parent_instance = None  # don't create another Base_Metric
+
 
 
     def run(self, dataSlice, slice_point=None):
@@ -310,7 +316,9 @@ class Detect_Metric(Base_Metric):
                 if isinstance(obs_record[k], np.ndarray):
                     obs_record[k] = obs_record[k][keep]
  
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric
+
     
         detected_mask = snr >= 5
         first_det_mjd = np.nan
@@ -342,9 +350,19 @@ class Detect_Metric(Base_Metric):
             #rise_time = first_det_mjd - (self.mjd0 + slice_point['peak_time'])
             fade_time = last_det_mjd - (self.mjd0 + slice_point['peak_time'])
     
-        peak_index = np.argmin(obs_record['mag_obs'])
-        peak_mjd = obs_record['mjd_obs'][peak_index] if len(obs_record['mjd_obs']) > 0 else np.nan
-        peak_mag = obs_record['mag_obs'][peak_index] if len(obs_record['mag_obs']) > 0 else np.nan
+        mags = np.asarray(obs_record['mag_obs'], dtype=float)
+        mjds = np.asarray(obs_record['mjd_obs'], dtype=float)
+        
+        finite = np.isfinite(mags) & (mags < 90)  # drop NaNs and 99-style sentinels
+        if np.any(finite):
+            i_rel = np.nanargmin(mags[finite])     # index within finite subset
+            i_abs = np.flatnonzero(finite)[i_rel]  # map back to original index
+            peak_mag = float(mags[i_abs])
+            peak_mjd = float(mjds[i_abs])
+        else:
+            peak_mag = np.nan
+            peak_mjd = np.nan
+
     
         obs_record.update({
             'first_det_mjd': first_det_mjd,
@@ -366,7 +384,7 @@ class Detect_Metric(Base_Metric):
             'mjd_obs': obs_record.get('mjd_obs', np.array([])).tolist(),
             # 'theta_obs': slice_point['theta_obs'],
             'filter': obs_record.get('filter', np.array([])).tolist(),
-            'distance_modulus': 5 * np.log10(slice_point['distance'] * 1e6) - 5
+            'distance_modulus': slice_point.get('distance_modulus')
         })    
 
         self.obs_records[slice_point['sid']] = obs_record
@@ -409,13 +427,15 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
         super().__init__(**kwargs, use_extinction=use_extinction, use_kcorrect=use_kcorrect)
         self.metricName = kwargs.get('metricName', 'GRB_Characterize')
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric(use_extinction=use_extinction, use_kcorrect=use_kcorrect)
-        
+        #9/11
+        #self.parent_instance = Base_Metric(use_extinction=use_extinction, use_kcorrect=use_kcorrect) # No secondary Base_Metric: avoids rebuilding/ reloading LC
+
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         #OLD BELOW HERE
         
-        # detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
+        #detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric
         # if detected:
         #     good = snr >= 5
         #     if np.sum(good) < 4:
@@ -470,16 +490,22 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
     def __init__(self, **kwargs):
         use_extinction = kwargs.pop('use_extinction', True)
         use_kcorrect = kwargs.pop('use_kcorrect', True)
-        super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs, use_extinction=use_extinction,use_kcorrect=use_kcorrect)
+        #9/11
+        #super().__init__(load_from="GRBAfterglow_templates.pkl", **kwargs, use_extinction=use_extinction,use_kcorrect=use_kcorrect)
+        super().__init__(**kwargs, use_extinction=use_extinction, use_kcorrect=use_kcorrect)
+
         self.metricName = kwargs.get('metricName', 'GRB_SpecTrigger')
-        self.parent_instance = Base_Metric(use_extinction=use_extinction,use_kcorrect=use_kcorrect)
+        #self.parent_instance = Base_Metric(use_extinction=use_extinction,use_kcorrect=use_kcorrect) # No secondary Base_Metric: avoids rebuilding/ reloading LC
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
         
         if obs_record is None or len(obs_record['mjd_obs']) < 2:
             return 0.0
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+            
+        #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric
+        
         if detected!=True:
             return 0.0
         # Sort by time

@@ -88,19 +88,6 @@ def inject_uniform_healpix(nside, n_events, seed=42):
     ra = np.degrees(phi)
     dec = np.degrees(0.5 * np.pi - theta)
     return ra, dec
-# --------------------------------------------
-# Updated utility for realistic uniform sky with WFD mask
-# --------------------------------------------
-
-def uniform_wfd_sky(n_points, mask_map, nside=64, seed=None):
-    rng = np.random.default_rng(seed)
-    ipix_all = np.arange(len(mask_map))
-    ipix_wfd = ipix_all[mask_map > 0.5]  # Use mask threshold to define footprint
-    selected_ipix = rng.choice(ipix_wfd, size=n_points, replace=True)
-    theta, phi = hp.pix2ang(64, selected_ipix, nest=False)
-    dec = 90 - np.degrees(theta)
-    ra = np.degrees(phi)
-    return ra, dec
 
 # --------------------------------------------
 # Plotting light curves from pkl file
@@ -317,7 +304,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
 
         #8/28
         # --- Cadence-aware implanted peaks (apples-to-apples) ---
-        ax1 = DustValues().ax1  # extinction coeffs
+        #ax1 = DustValues().ax1  # extinction coeffs 9/11
         
         def _cadence_injected_peak_for_sid(sid, f):
             """
@@ -325,7 +312,7 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             then add DM + (EBV*A_f) + (optional K-corr). Return the min (i.e., "peak")
             seen by the cadence in that band.
             """
-            rec = detect_metric.obs_records.get(sid, None)
+            rec = detect_metric.obs_records.get(sid)
             if rec is None:
                 return np.nan
         
@@ -343,33 +330,42 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
             tt = mjd_arr - detect_metric.mjd0 - slicer.slice_points['peak_time'][sid]
         
             # template index and intrinsic mags at these times
-            idx = int(slicer.slice_points['file_indx'][sid])
+            idx  = int(slicer.slice_points['file_indx'][sid])
             mags = shared_lc_model.interp(tt, f, idx)
-        
             finite = np.isfinite(mags)
             if not np.any(finite):
                 return np.nan
             mags = mags[finite]
         
-            # DM + extinction (optional)
-            dm = 5 * np.log10(slicer.slice_points['distance'][sid] * 1e6) - 5
-            if use_extinction:
-                mags = mags + ax1[f] * float(slicer.slice_points['ebv'][sid])
-            mags = mags + dm
-        
-            # K-correction (optional)
+            # --- make the additive terms scalars ---
+            # 9/11
+            dm = float(np.asarray(slicer.slice_points['distance_modulus'])[sid])
+            
+            # A_f : use precomputed per-filter extinction if present (vector), else fallback
+            A_vec = slicer.slice_points.get(f'A_{f}', None)
+            if A_vec is None:
+                A_f = float(dust_model.ax1[f] * float(np.asarray(slicer.slice_points['ebv'])[sid]))
+            else:
+                A_f = float(np.asarray(A_vec)[sid])
+            
+            # K_f : likewise, per-event scalar (or 0 if not using / not present)
             if use_kcorrect:
-                z = z_at_value(cosmo.comoving_distance, slicer.slice_points['distance'][sid] * u.Mpc)
-                mags = mags + apply_kcorrection(z, f, k_correct_type, k_correct_arg)
+                K_vec = slicer.slice_points.get(f'K_{f}', None)
+                K_f = float(np.asarray(K_vec)[sid]) if K_vec is not None else 0.0
+            else:
+                K_f = 0.0
+
         
-            # cadence-seen "peak" = min over those visit times
+            mags = mags + dm + A_f + K_f
             return float(np.nanmin(mags))
+
         
-        # compute/store for all events and filters
-        all_sids = df_obs['sid'].values
+        # compute/store for all events and filters 9/11
+        all_sids = df_obs['sid'].dropna().astype(int).tolist()
         for f in 'ugrizy':
             col = f'injected_peak_ebv_mag_{f}_cadence'
-            df_obs[col] = [ _cadence_injected_peak_for_sid(int(sid), f) for sid in all_sids ]
+            df_obs[col] = [_cadence_injected_peak_for_sid(sid, f) for sid in all_sids]
+
 
 
         n_observations_detected = []
@@ -429,35 +425,32 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
         except Exception as e:
             print(f"[diag] skipped ({e})")
 
-
         if plot:
             filtername = 'r'
-            ax1 = DustValues().ax1
             ras, decs, peak_mags, detected_flags = [], [], [], []
-
+        
             for i in range(n_events):
-                ra = slicer.slice_points['ra'][i]
+                ra  = slicer.slice_points['ra'][i]
                 dec = slicer.slice_points['dec'][i]
-                d = slicer.slice_points['distance'][i]
-                ebv = slicer.slice_points['ebv'][i]
-                file_indx = min(slicer.slice_points['file_indx'][i], len(shared_lc_model.data) - 1)
-                try:
-                    m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag'])
-                except:
-                    m_peak = 99.0
-                A = ax1[filtername] * ebv
-                dm = 5 * np.log10(d * 1e6) - 5
-                m_app = m_peak + dm + A
-
+        
+                # Use Popslicer’s precomputed apparent peak (includes DM and EBV)
+                m_app = slicer.slice_points[f'peak_app_mag_ebv_{filtername}'][i]
+        
+                # Optionally add K-correction if it was precomputed and requested
+                if use_kcorrect and f'K_{filtername}' in slicer.slice_points:
+                    m_app = m_app + slicer.slice_points[f'K_{filtername}'][i]
+        
                 ras.append(ra)
                 decs.append(dec)
                 peak_mags.append(m_app)
+        
                 detected = any(
                     per_filter_metrics[f"Detect_{f}"].metric_values[i] == 1
                     and not per_filter_metrics[f"Detect_{f}"].metric_values.mask[i]
                     for f in filters
                 )
                 detected_flags.append(detected)
+
 
             plt.figure(figsize=(8, 4))
             plt.scatter(ras, peak_mags, c='black', s=10, label='Injected', alpha=0.6)
@@ -521,7 +514,9 @@ def run_detect(metric, slicer, cadences, shared_lc_model, db_dir, storage_dir, d
         with open(outfile, "w") as out:
             out.write("sid,n_filters_detected\n")
             for i in range(len(df_obs)):
-                out.write(f"{i},{n_filters_detected_per_event[i]}\n")
+                sid = int(df_obs['sid'].iloc[i])
+                out.write(f"{sid},{n_filters_detected_per_event[i]}\n")
+        
 
         if clean_temp:
             print(f"[CLEANUP] Removing temp directory: {outDir}")
@@ -594,65 +589,37 @@ def run_multi_metrics(multi_metrics, slicer, cadences, shared_lc_model, db_dir, 
                 _["run"] = runName
                 _["n_events_full_sky"] =  n_events              
                 df = pd.concat([df, _])
-        # Healpix plotting
+            # Healpix plotting
+    
+            if plot:
+                nside = slicer.nside if hasattr(slicer, 'nside') else 64
+                npix = hp.nside2npix(nside)
+                injected_map = np.zeros(npix)
+                detected_map = np.zeros(npix)
+            
+                ra_rad  = slicer.slice_points['ra']   # radians
+                dec_rad = slicer.slice_points['dec']  # radians
+                theta = 0.5 * np.pi - dec_rad
+                phi   = ra_rad
+                pix_inds = hp.ang2pix(nside, theta, phi)
+            
+                for i, pix in enumerate(pix_inds):
+                    injected_map[pix] += 1
+                    if bundle.metric_values[i] == 1:
+                        if np.random.rand() < 0.001:
+                            print(f"[DEBUG] Detected RA, Dec: {np.degrees(ra_rad[i]):.2f}, {np.degrees(dec_rad[i]):.2f}")
+                        detected_map[pix] += 1
+            
+                eff_map = np.zeros(npix)
+                mask = injected_map > 0
+                eff_map[mask] = detected_map[mask] / injected_map[mask]
+                eff_map[~mask] = hp.UNSEEN
+            
+                hp.mollview(eff_map, title=f"{runName} – {one_metric.metricName} Efficiency",
+                            unit='Efficiency', cmap='viridis')
+                hp.graticule()
+                plt.show()
 
-            if plot == True:
-                # Plot: Apparent magnitude vs RA and Dec for one filter (e.g. 'r')
-                filtername = 'r'
-                ax1 = DustValues().ax1
-                 
-                ras, decs, peak_mags, detected_flags = [], [], [], []
-             
-                for i in range(n_events):
-                    ra = slicer.slice_points['ra'][i]
-                    dec = slicer.slice_points['dec'][i]  # this is in radians already
-                    d = slicer.slice_points['distance'][i]
-                    ebv = slicer.slice_points['ebv'][i]
-                    file_indx = min(slicer.slice_points['file_indx'][i], len(shared_lc_model.data) - 1)
-                    
-                    m_peak = np.min(shared_lc_model.data[file_indx][filtername]['mag'])
-                    A = ax1[filtername] * ebv
-                    dm = 5 * np.log10(d * 1e6) - 5
-                    m_app = m_peak + dm + A
-                 
-                    ras.append(ra)
-                    decs.append(dec)
-                    peak_mags.append(m_app)
-                 
-
-                
-                if plot == True:
-                    nside = slicer.nside if hasattr(slicer, 'nside') else 64
-                    npix = hp.nside2npix(nside)
-                    injected_map = np.zeros(npix)
-                    detected_map = np.zeros(npix)
-            
-                    ra_rad = slicer.slice_points['ra']
-                    dec_rad = slicer.slice_points['dec']
-                    theta = 0.5 * np.pi - dec_rad
-                    phi = ra_rad
-                    pix_inds = hp.ang2pix(nside, theta, phi)
-            
-                    #print(f"[DEBUG] RA range [rad]: {ra_rad.min():.2f} – {ra_rad.max():.2f}")
-                    #print(f"[DEBUG] Dec range [rad]: {dec_rad.min():.2f} – {dec_rad.max():.2f}")
-                    #print(f"[DEBUG] Dec range [deg]: {np.degrees(dec_rad).min():.2f} – {np.degrees(dec_rad).max():.2f}")
-                    
-                    for i, pix in enumerate(pix_inds):
-                        injected_map[pix] += 1
-                        #if detected_flags[i] :
-                        if bundle.metric_values[i] == 1:
-                            if np.random.rand() < 0.001:
-                                print(f"[DEBUG] Detected RA, Dec: {np.degrees(ra_rad[i]):.2f}, {np.degrees(dec_rad[i]):.2f}")
-                            detected_map[pix] += 1
-            
-                    eff_map = np.zeros(npix)
-                    mask = injected_map > 0
-                    eff_map[mask] = detected_map[mask] / injected_map[mask]
-                    eff_map[~mask] = hp.UNSEEN
-            
-                    hp.mollview(eff_map, title=f"{runName} – {one_metric.metricName} Efficiency", unit='Efficiency', cmap='viridis')
-                    hp.graticule()
-                    plt.show()
 
         if clean_temp:
             for cadence in cadences:
@@ -716,7 +683,10 @@ def load_or_generate_population(use_extinction, pop_file, lc_model=None, t_start
                                 num_lightcurves=1000,
                                 gal_lat_cut=None, rate_density=1e-8,
                                 generate_new=False,
-                                make_debug_plots=False):
+                                make_debug_plots=False,
+                                use_kcorrect=False,
+                                k_correct_type=None,
+                                k_correct_arg=None,):
     """
     Load population from a saved file or generate a new one.
 
@@ -750,21 +720,31 @@ def load_or_generate_population(use_extinction, pop_file, lc_model=None, t_start
     """
     if generate_new or not os.path.exists(pop_file):
         print(f"[INFO] Generating population and saving to {pop_file}")
-        slicer = generate_PopSlicer(use_extinction=use_extinction,
-                                    lc_model=lc_model,
-                                    t_start=t_start, t_end=t_end,
-                                    d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max,
-                                    seed=seed, num_lightcurves=num_lightcurves,
-                                    gal_lat_cut=gal_lat_cut, rate_density=rate_density,
-                                    save_to=pop_file,               # ensure atomic save on generate
-                                    make_debug_plots=make_debug_plots)
+        slicer = generate_PopSlicer(
+            use_extinction=use_extinction,
+            lc_model=lc_model,
+            t_start=t_start, t_end=t_end,
+            d_min=d_min, d_max=d_max, z_min=z_min, z_max=z_max,
+            seed=seed, num_lightcurves=num_lightcurves,
+            gal_lat_cut=gal_lat_cut, rate_density=rate_density,
+            save_to=pop_file,
+            make_debug_plots=make_debug_plots,
+            use_kcorrect=use_kcorrect,                #  add 9/11
+            k_correct_type=k_correct_type,            #  add
+            k_correct_arg=k_correct_arg               #  add
+        )
+
     else:
         print(f"[INFO] Loading population from {pop_file}")
         slicer = generate_PopSlicer(use_extinction=use_extinction,
                                     lc_model=lc_model,               # <-- CRITICAL
                                     load_from=pop_file,
                                     save_to=pop_file,                # re-save atomically if backfilled
-                                    make_debug_plots=False)
+                                    make_debug_plots=False,
+                                        use_kcorrect=use_kcorrect,                #  add 9/11
+                                        k_correct_type=k_correct_type,            #  add
+                                        k_correct_arg=k_correct_arg               #  add
+                                    )
     return slicer
 
     
@@ -777,7 +757,7 @@ def load_or_generate_population(use_extinction, pop_file, lc_model=None, t_start
 def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, seed=42,
                          d_min=None, d_max=None, z_min = None, z_max = None, num_lightcurves=1000, 
                        gal_lat_cut=None, rate_density=None, 
-                         load_from=None, save_to=None, make_debug_plots=True):
+                         load_from=None, save_to=None, make_debug_plots=True, use_kcorrect=False, k_correct_type=None, k_correct_arg=None,):
     """
     Generate or load a population of events. When loading:
       - if peak columns are missing and lc_model is provided, they are backfilled.
@@ -929,6 +909,19 @@ def generate_PopSlicer(use_extinction, lc_model=None, t_start=1, t_end=3652, see
     
     print("gal_lat_cut is none")
 
+    #------
+    #9/11
+    # store per-filter extinction terms
+    for f in ['u','g','r','i','z','y']:
+        slicer.slice_points[f'A_{f}'] = dust_model.ax1[f] * ebv_vals  # vector same length as events
+    
+    # optional K-correction constants (if you plan to use them)
+    if use_kcorrect:
+        z_all = z_at_value(cosmo.comoving_distance, np.asarray(distances) * u.Mpc)
+        for f in ['u','g','r','i','z','y']:
+            slicer.slice_points[f'K_{f}'] = apply_kcorrection(z_all, f, k_correct_type, k_correct_arg)
+    #---------
+
     if make_debug_plots==True:  
         plt.hist(peak_times,  bins=50)
         plt.xlabel("peak time")
@@ -1002,7 +995,10 @@ def build_filenames(rate_density,
     if base_dir==None:
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output"))
         
-    label = science_case + f"_den_{rate_density}_d_{d_min}-{d_max}_Mpc_z_{z_min}-{z_max}_Mpc_ext_{use_extinction}_kcor_{use_kcorrect}_{testname}"
+    label = (f"{science_case}_den_{rate_density}"
+             f"_d_{d_min}-{d_max}_Mpc"
+             f"_z_{z_min}-{z_max}"
+             f"_ext_{use_extinction}_kcor_{use_kcorrect}_{testname}")
     print(label)
 
     storage_dir = os.path.join(base_dir, science_case)
@@ -1171,44 +1167,80 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     # 8/28 mags = np.zeros(t.size)
     filters = dataSlice[self.filterCol]
     m5      = dataSlice[self.m5Col]
-    dm      = 5 * np.log10(slice_point['distance'] * 1e6) - 5
 
+    # 9/11 -----------
+    # Allocate output magnitudes
     mags = np.full(t.size, np.nan)
-    tmin, tmax = None, None
-    if hasattr(self.lc_model, "t_grid"):
-        tg = np.asarray(self.lc_model.t_grid)
-        tmin, tmax = float(tg.min()), float(tg.max())
+    
+    # Template support bounds (robust defaults)
+    tg = np.asarray(getattr(self.lc_model, "t_grid", []), dtype=float)
+    if tg.size:
+        tmin, tmax = float(np.nanmin(tg)), float(np.nanmax(tg))
+    else:
+        tmin, tmax = -np.inf, np.inf
+    # ------------
 
-        # precompute z once if using k-correction
-    z = None
-    if self.use_kcorrect:
-        z = z_at_value(cosmo.comoving_distance, slice_point['distance'] * u.Mpc)
+    # dm      = 5 * np.log10(slice_point['distance'] * 1e6) - 5
 
+    # mags = np.full(t.size, np.nan)
+    # tmin, tmax = None, None
+    # if hasattr(self.lc_model, "t_grid"):
+    #     tg = np.asarray(self.lc_model.t_grid)
+    #     tmin, tmax = float(tg.min()), float(tg.max())
+
+    #     # precompute z once if using k-correction
+    # z = None
+    # if self.use_kcorrect:
+    #     z = z_at_value(cosmo.comoving_distance, slice_point['distance'] * u.Mpc)
+
+    
+    # for f in np.unique(filters):
+    #     idx = np.where(filters == f)[0]
+    #     tt  = t[idx]
+    
+    #     # valid only where we have template support
+    #     valid = np.ones(tt.size, bool)
+    #     if tmin is not None and tmax is not None:
+    #         valid &= (tt >= tmin) & (tt <= tmax)
+    
+    #     # interpolate only for valid times
+    #     vals = np.full(tt.size, np.nan)
+    #     if np.any(valid):
+    #         vals[valid] = self.lc_model.interp(tt[valid], f, slice_point['file_indx'])
+    
+    #     # K-corr, extinction, DM only on finite values, Precompute redshift once per event if using k-corrections
+
+    #     finite = np.isfinite(vals)
+    #     if self.use_kcorrect and np.any(finite):
+    #         vals[finite] += apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
+    #     if self.use_extinction and np.any(finite):
+    #         vals[finite] += self.ax1[f] * slice_point['ebv']
+    #     if np.any(finite):
+    #         vals[finite] += dm
+    
+    #     mags[idx] = vals
+
+    # -------------
+    #9/11 - lookup from slice point not recomputing
+    dm = slice_point['distance_modulus']  # scalar per event
+    tpl_idx = int(slice_point['file_indx'])
+    tpl_idx = max(0, min(tpl_idx, len(self.lc_model.data) - 1))
     
     for f in np.unique(filters):
         idx = np.where(filters == f)[0]
         tt  = t[idx]
     
-        # valid only where we have template support
-        valid = np.ones(tt.size, bool)
-        if tmin is not None and tmax is not None:
-            valid &= (tt >= tmin) & (tt <= tmax)
+        vals  = np.full(tt.size, np.nan)
+        valid = (tt >= tmin) & (tt <= tmax)
     
-        # interpolate only for valid times
-        vals = np.full(tt.size, np.nan)
         if np.any(valid):
-            vals[valid] = self.lc_model.interp(tt[valid], f, slice_point['file_indx'])
+            vals[valid] = self.lc_model.interp(tt[valid], f, tpl_idx)
     
-        # K-corr, extinction, DM only on finite values, Precompute redshift once per event if using k-corrections
-
         finite = np.isfinite(vals)
-        if self.use_kcorrect and np.any(finite):
-            vals[finite] += apply_kcorrection(z, f, self.k_correct_type, self.k_correct_arg)
-        if self.use_extinction and np.any(finite):
-            vals[finite] += self.ax1[f] * slice_point['ebv']
         if np.any(finite):
-            vals[finite] += dm
-
+            A_f = slice_point.get(f'A_{f}', self.ax1[f] * slice_point['ebv'])  # uses precomputed A_f if present
+            K_f = slice_point.get(f'K_{f}', 0.0) if self.use_kcorrect else 0.0 # uses precomputed K_f if present
+            vals[finite] += dm + A_f + K_f
     
         mags[idx] = vals
             
@@ -1225,6 +1257,7 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
 
 
     if not return_full_obs:
+        print("DID YOU NOT RETURN THE OBS RECORD ON PURPOSE??")
         return snr, filters, times, None
 
     # Build obs_record
@@ -1270,20 +1303,6 @@ def evaluate(self, dataSlice, slice_point, return_full_obs=True):
     # --------------------------------------------------------------------
 
     return snr, filters, times, obs_record
-    
-
-    if return_full_obs:
-        obs_record = {
-            'mjd_obs': dataSlice[self.mjdCol],
-            'mag_obs': mags,
-            'snr_obs': snr,
-            'filter': filters
-        }
-        
-        return snr, filters, times, obs_record
-    print("DID YOU NOT RETURN THE OBS RECORD ON PURPOSE??")
-    return snr, filters, times, None
-
 
 FILTER_CENTRAL_FREQS = {
     'u': 8.088e14,
@@ -1360,7 +1379,7 @@ def get_kcorrection_blackbody(z, obs_filter, temperature):
     # print(x_rest)
     x_obs = h * nu_obs / (k_b * temperature)
     
-    if type(z)==list or type(z)==np.ndarray:
+    if isinstance(z, (list, np.ndarray)):
         flux_ratio = np.zeros(len(x_rest))
         # Overflow protection: if x > ~700, exp(x) overflows
         for i in range(len(x_rest)):
@@ -1605,17 +1624,32 @@ def plot_population_lcs(pop_file,
     if lc_model is None:
         if templates_file is None:
             raise ValueError("Provide lc_model or templates_file.")
-        from local_GRBafterglows_metric import LC
-        lc_model = LC(load_from=templates_file)
+        lc_model = PickledLC(templates_file)  # uses existing templates; no regeneration
 
     # choose a generic relative grid
     t_rel = np.linspace(-days_before, days_after, n_time)
     t_plot = _np.log10(_np.maximum(t_rel, 1e-5)) if use_log_time else t_rel
     
-    # template bounds once
-    t0 = getattr(lc_model, "t_grid", _np.array([0.0]))[0]
-    t1 = getattr(lc_model, "t_grid", _np.array([0.0]))[-1]
-    t_eval = _np.clip(t_rel, t0, t1)  # stays within template support
+    # # template bounds once
+    # t0 = getattr(lc_model, "t_grid", _np.array([0.0]))[0]
+    # t1 = getattr(lc_model, "t_grid", _np.array([0.0]))[-1]
+    # t_eval = _np.clip(t_rel, t0, t1)  # stays within template support
+
+    # 9/11 ---------
+    # choose a grid inside the template’s support
+    t0 = float(getattr(lc_model, "t_grid", np.array([1e-5]))[0])
+    t1 = float(getattr(lc_model, "t_grid", np.array([0.5]))[-1])
+    t_hi = min(days_after, t1)
+    
+    if use_log_time:
+        t_rel  = np.geomspace(max(1e-5, t0), max(1e-5, t_hi), n_time)
+        t_plot = np.log10(t_rel)
+    else:
+        t_rel  = np.linspace(0.0, t_hi, n_time)
+        t_plot = t_rel
+    
+    t_eval = t_rel  # no clip/mask needed now
+    # -------------
 
     for sid in sids:
         file_indx = int(_np.asarray(slice_points['file_indx']).ravel()[sid].item())
@@ -1922,3 +1956,36 @@ def compare_flux_diff_to_error(mag_1, mag_2, snr_1, snr_2, F0=8.9, return_bool=F
     if return_bool==True:
         return np.abs(flux_diff / error_combo) > 3
     return np.abs(flux_diff / error_combo)
+
+#----------------
+# 9/11 Function to read LCs without case specifics 
+# ---------------
+class PickledLC:
+    """Read-only loader for templates.pkl that provides .interp like LC."""
+    def __init__(self, load_from):
+        if not os.path.exists(load_from):
+            raise FileNotFoundError(f"templates_file not found: {load_from}")
+        with open(load_from, "rb") as f:
+            obj = pickle.load(f)
+        if "lightcurves" not in obj:
+            raise ValueError("templates_file missing 'lightcurves' key")
+        self.data   = obj["lightcurves"]
+        self.t_grid = obj.get("t_grid", None)
+
+    def interp(self, t, filtername, lc_indx=0):
+        t   = np.asarray(t, float)
+        ph  = np.asarray(self.data[lc_indx][filtername]["ph"],  float)
+        mag = np.asarray(self.data[lc_indx][filtername]["mag"], float)
+
+        # Heuristic: if template is post-peak only (all ph>0), use log-time interp;
+        # otherwise fall back to linear-time interp.
+        if np.all(ph > 0):
+            x  = np.log10(np.clip(t, ph.min(), ph.max()))
+            xp = np.log10(ph)
+            out = np.interp(x, xp, mag, left=np.nan, right=np.nan)
+        else:
+            out = np.interp(t, ph, mag, left=np.nan, right=np.nan)
+
+        # NaN outside support
+        out[(t < ph.min()) | (t > ph.max())] = np.nan
+        return out
