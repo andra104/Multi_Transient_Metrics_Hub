@@ -253,11 +253,12 @@ class Base_Metric(BaseMetric):
         
         # 9/11 Cristina improved for color 
         # previous gate only required two SNR>=10 within 1 hr, regardless of filter. We want color so I added a distinct-filter condition in that pair test.
+        #shar sept requiring within a night for the color instead of within an hour
         good = snr >= 10
-        if np.sum(good) >= 2:
+        if np.sum(good) <= 2:
             tg, fg = times[good], np.asarray(filters)[good]
             detected_part_1 = any(
-                (0 < abs(tg[j]-tg[i]) < 1/24) and (fg[i] != fg[j])
+                (0 < abs(tg[j]-tg[i]) < 12/24) and (fg[i] != fg[j])
                 for i in range(len(tg)) for j in range(i+1, len(tg))
             )
         if not detected_part_1:
@@ -279,7 +280,6 @@ class Base_Metric(BaseMetric):
                 # print(mags_in_filter - mag)
                 # if np.any(np.abs(mags_in_filter - mag)>.1): #TODO: implement error
                     # print("we got a detection!")
-                
                 if np.any(compare_flux_diff_to_error(mags_in_filter, mag, snr_in_filter, one_snr, return_bool=True)): #shar sept
                     detected=True
                     return detected
@@ -289,7 +289,6 @@ class Base_Metric(BaseMetric):
 
 
         
-#shar removed betterdetect cause we don't use it
     
 
 # --------------------------------------------
@@ -430,7 +429,7 @@ class Detect_Metric(Base_Metric):
         return 1.0 if detected else 0.0
 
 
-
+'''
 
 
 # --------------------------------------------
@@ -506,7 +505,7 @@ class GRBAfterglowCharacterizeMetric(Base_Metric):
             # observed_detection_times = times_in_filter[snr_in_filter >= 5]
         
         return 0.0
-
+'''
 # --------------------------------------------
 # Spectroscopic Triggerability Metric
 # Detects if ≥2 filters are triggered within 0.5 days of peak
@@ -519,7 +518,7 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
     An event is considered triggerable if:
     
     (0.5) it is detected
-    (1) At least one filter shows brightness < 21 mag within the first two days of peak,
+    (1) At least one filter shows brightness < 21 mag within the first day of peak,
     (2) It rises faster than 0.3 mag/day in that filter, #always true in our model
     (3) Both detections used to assess this have SNR >= 5.
     """
@@ -570,7 +569,7 @@ class GRBAfterglowSpecTriggerableMetric(Base_Metric):
             
             if len(best_times) > 0:  
                 peak_time = self.mjd0 + slice_point['peak_time']
-                if np.any (np.abs(best_times - peak_time) < 2):
+                if np.any (np.abs(best_times - peak_time) < 1):
                     return 1.0  
                 
             #assume rise rate is always that fast and detected. 
@@ -595,7 +594,7 @@ def get_multi_metrics(lc_model, use_kcorrect, include=None, use_extinction=True,
     """
     all_metrics = {
         'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
-        'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
+        # 'characterize': GRBAfterglowCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
         'spec_trigger': GRBAfterglowSpecTriggerableMetric(lc_model=lc_model, use_extinction=use_extinction,use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
     }
 

@@ -34,26 +34,28 @@ DEBUG = False
 # Light Curve Model for LFBOTs
 # --------------------------------------------
 
+
 class LC:
     """
-    LFBOT templates with pre- and post-peak support.
-    Peak at t=0. Broken power-law around t=0 with (alpha_rise, alpha_fade).
-    We set a scale t_eps so that the total time above half-max flux (~0.75 mag)
-    is ~12 days on average, with per-template variation via the slopes.
+    Generate synthetic light curves for Luminous Fast Blue Optical Transients (LFBOTs).
+
+    Light curves are modeled with band-dependent rise and fade slopes, peaking around ~1 day,
+    and spanning a fast-evolving timescale of ~0.1 to 10 days. Only g and r bands are populated,
+    consistent with the predominantly blue emission of LFBOTs.
     """
-    def __init__(self, num_samples=200, num_lightcurves=1000, load_from=None):
+    def __init__(self, num_samples = 100, num_lightcurves=1000, load_from=None):
         self.filts = ['u', 'g', 'r', 'i', 'z', 'y']
         self.data = []
-        self.t_grid = None
-        # flux ratios w.r.t g
+        self.t_grid = None  # 0.1–10 days
         self.ratios = {
             'u': 0.47184822835586304,
             'g': 1.0,
             'r': 0.4356131668415372,
             'i': 0.20399584045639102,
             'z': 0.09743514963840874,
-            'y': 0.0347938320584038,
+            'y': 0.0347938320584038
         }
+        # Do the mag change as an additive factor using the mag ratios (that were converted from the flux ratios), should be a single line as an arrray
 
         if load_from and os.path.exists(load_from):
             with open(load_from, 'rb') as f:
@@ -63,44 +65,36 @@ class LC:
             print(f"Loaded LFBOT templates from {load_from}")
             return
 
+
         rng = np.random.default_rng(42)
-        D_half_target = 12.0  # days above half-max flux (~0.75 mag from peak)
+        self.t_grid = np.linspace(0.01, 15.0, num_samples)  # or use logspace
 
         for _ in range(num_lightcurves):
-            # sample peak mag and slopes
-            m_peak_g   = rng.uniform(-22.0, -19.5)
-            alpha_rise = rng.uniform(0.8, 3.0)
-            alpha_fade = rng.uniform(0.8, 2.0)
-
-            # solve t_eps so total half-max duration ≈ 12 d
-            # Δmag = 0.75 mag ↔ flux_ratio = 0.5 (half-max)
-            # |t|_half,rise  ≈ t_eps * (10^(0.3/alpha_rise) - 1)
-            # t_half,fade    ≈ t_eps * (10^(0.3/alpha_fade) - 1)
-            A = 10**(0.3/alpha_rise) - 1.0
-            B = 10**(0.3/alpha_fade) - 1.0
-            t_eps = D_half_target / max(A + B, 1e-3)
-            t_eps = float(np.clip(t_eps, 0.05, 5.0))  # constrain to 0.05–5 d
-
-            # symmetric grid around peak; wide enough for fades
-            t_pre  = -max(5.0 * t_eps, 0.5)
-            t_post =  max(10.0 * t_eps, 10.0)
-            self.t_grid = np.linspace(t_pre, t_post, num_samples)
-
-            # g-band broken power-law in magnitude
-            t = self.t_grid
-            mag_g = np.empty_like(t)
-            pre  = t < 0
-            post = ~pre
-            mag_g[pre]  = m_peak_g + 2.5*alpha_rise*np.log10((np.abs(t[pre]) + t_eps)/t_eps)
-            mag_g[post] = m_peak_g + 2.5*alpha_fade*np.log10((t[post] + t_eps)/t_eps)
-
-            # fill other bands via fixed flux ratios
-            flux_g = 10**(-0.4*mag_g)
             lc = {}
+
+            m0_g = rng.uniform(-22, -19.5)  # peak absolute mag
+            t0 = 5     # time of peak (days)
+            alpha_rise = rng.uniform(0.5, 2.5)
+            alpha_fade = rng.uniform(0.5, 1)
+            # alpha_fade = 2.2
+
+            # print(f"m0:_g:{m0_g},t0:{t0},rise:{alpha_rise},fade:{alpha_fade}")
+
+            mag_g = np.zeros_like(self.t_grid)
+
+            for i, t in enumerate(self.t_grid):
+                if t < t0:
+                    mag_g[i] = m0_g - 2.5 * alpha_rise * np.log10(t / t0)
+                    # mag_g[i] = m0_g - (np.exp(t)-np.exp(t0))
+                else:
+                    mag_g[i] = m0_g + 2.5 * alpha_fade * np.log10(t / t0)
+
+            flux_g = 10 ** (-0.4 * mag_g)
             for f in self.filts:
                 flux_f = flux_g * self.ratios[f]
-                mag_f  = -2.5 * np.log10(flux_f)
+                mag_f = -2.5 * np.log10(flux_f)
                 lc[f] = {'ph': self.t_grid, 'mag': mag_f}
+
             self.data.append(lc)
 
     def interp(self, t, filtername, lc_indx=0):
@@ -183,7 +177,7 @@ class Base_Metric(BaseMetric):
         times = np.asarray(times, dtype=float)
     
         # times is relative (days since peak) from shared_utils.evaluate
-        pre = times < 0.0
+        pre = times < 5 #shar sept remember should be t0 but currently that's 5
         if np.sum(pre) < 2:
             return False
     
@@ -192,7 +186,7 @@ class Base_Metric(BaseMetric):
         t_pre = times[pre]
     
         # Gate A: pre-peak color within 2 hours
-        good = s_pre >= 10
+        good = s_pre >= 5
         if np.sum(good) >= 2:
             tg, fg = t_pre[good], f_pre[good]
             color_ok = any((0 < abs(tg[j]-tg[i]) < (2/24)) and (fg[i] != fg[j])
@@ -209,8 +203,9 @@ class Base_Metric(BaseMetric):
                 m = np.asarray(obs_record['mag_obs'], float)[pre][mask]
                 s = s_pre[mask]
                 for i in range(m.size):
-                    sig = compare_flux_diff_to_error(m, m[i], s, s[i], return_bool=False)
-                    if np.size(sig) and np.nanmax(np.atleast_1d(sig)) > 3.0:
+                    sig = compare_flux_diff_to_error(m, m[i], s, s[i], return_bool=True)
+                    # if np.size(sig) and np.nanmax(np.atleast_1d(sig)) > 3.0:
+                    if np.any(sig==True):
                         return True
         return False
 
@@ -356,7 +351,7 @@ class Detect_Metric(Base_Metric):
         
     
         return 1.0 if detected else 0.0
-
+'''
 # --------------------------------------------
 # Characterization Metric for LFBOTs
 # --------------------------------------------
@@ -394,7 +389,7 @@ class LFBOTCharacterizeMetric(Base_Metric):
                     if np.size(sig) and np.nanmax(np.atleast_1d(sig)) > 3.0:
                         return 1.0
         return 0.0
-
+'''
 
 # --------------------------------------------
 # Multi_Metric Standardized Call
@@ -404,7 +399,7 @@ def get_multi_metrics(lc_model, include=None, use_extinction=True, use_kcorrect=
     """Return a list of metrics. `include` can filter by names."""
     all_metrics = {
         'detect': Detect_Metric(lc_model=lc_model, use_extinction=use_extinction, use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
-        'characterize': LFBOTCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction, use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
+        # 'characterize': LFBOTCharacterizeMetric(lc_model=lc_model, use_extinction=use_extinction, use_kcorrect=use_kcorrect, k_correct_type=k_correct_type, k_correct_arg=k_correct_arg),
     }
     if include is None:
         return list(all_metrics.values())

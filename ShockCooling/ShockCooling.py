@@ -150,7 +150,7 @@ class LC:
         def sample_rate(mu, sigma):
             return np.random.normal(mu, sigma)
 
-        t_rise = np.linspace(-1.5, 0, num_samples // 5)
+        t_rise = np.linspace(-4, 0, num_samples // 5) #shar sept
         t_fade = np.linspace(0.01, 5, num_samples)
         t_rerise = np.linspace(7, 13, num_samples)
 
@@ -179,7 +179,7 @@ class LC:
                     rise2_rate = max(sample_rate(rise2_rate, 0.01), 0.02)
             
                 #firse rise: use fist peak mag and rate and let evolve cor 2 days backward
-                t_rise = np.linspace(-2, 0, 2)
+                t_rise = np.linspace(-4, 0, 2)
                 mag_rise = peak_mag_1 + rise1_rate * (t_rise[::-1] - t_rise[0]) / np.ptp(t_rise)
         
                 if DEBUG:
@@ -234,11 +234,18 @@ class LC:
 
             self.data.append(lightcurve)
 
-    def interp(self, t, filtername, lc_indx=0):
-        return np.interp(t, self.data[lc_indx][filtername]['ph'],
-                         self.data[lc_indx][filtername]['mag'],
-                         left=99, right=99)
-
+    # def interp(self, t, filtername, lc_indx=0):
+    #     return np.interp(t, self.data[lc_indx][filtername]['ph'],
+    #                      self.data[lc_indx][filtername]['mag'],
+    #                      left=99, right=99)
+    def interp(self, t, filtername, lc_indx):
+        """Linear interpolation over t (supports t<0); NaN outside support."""
+        ph  = np.asarray(self.data[lc_indx][filtername]['ph'], dtype=float)
+        mag = np.asarray(self.data[lc_indx][filtername]['mag'], dtype=float)
+        t_arr = np.asarray(t, dtype=float)
+        out = np.interp(t_arr, ph, mag, left=np.nan, right=np.nan)
+        out[(t_arr < ph.min()) | (t_arr > ph.max())] = np.nan
+        return out
 
 
 # --------------------------------------------
@@ -281,19 +288,42 @@ class Base_Metric(BaseMetric):
         super().__init__(col=cols, metric_name=metricName, units='Detection Efficiency', badval=badval, **kwargs)
 
 
-    def detect(self, filters, snr, times, obs_record):
+    def detect(self, filters, snr, times, obs_record, slice_point):
+        #shar sept requiring two points in the rise
         detected = False     
     
         # Convert to arrays just in case
         filters = np.array(filters)
         snr = np.array(snr)
         times = np.array(times)
-        if np.any(snr>5):
-            detected=True
         
+
+        # for f in np.unique(filters):
+        #     mask = (filters == f) & (snr >= 5)
+        #     if np.sum(mask)>1:
+        #         t_filt = times[mask]  #time stamps in thet filter
+        #         snr_filt = snr[mask] #associated SNR
+            
+        #         t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time']
+        #         t_first_peak = self.lc_model.data[slice_point['file_indx']][f]['ph'][1] + slice_point['peak_time']
+        #         first_times = (t_filt>t_start)*(t_filt<t_first_peak)
+        #         if np.sum(first_times)>1:
+        #             detected = True
+        #             break
+
+        mask = snr >= 5
+        if np.sum(mask)>0: #require one detection in any filter in initial rise
+            t_filt = times[mask]  #time stamps
+            snr_filt = snr[mask] #associated SNR
+            filt = filters[mask]
+            for f in filt: #check every filter 
+                t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time']
+                t_first_peak = self.lc_model.data[slice_point['file_indx']][f]['ph'][1] + slice_point['peak_time']
+                first_times = (t_filt>t_start)*(t_filt<t_first_peak)
+                if np.sum(first_times)>0:
+                    detected = True
+                    break
         return detected
-
-
     
 
 # --------------------------------------------
@@ -307,7 +337,7 @@ class Detect_Metric(Base_Metric):
         super().__init__(**kwargs)
         self.metricName = kwargs.get('metricName', 'Detect')
         self.obs_records = {}  # <-- NEW: to store all detected event records individually
-        self.parent_instance = Base_Metric()
+        self.parent_instance = None #shar sept
 
 
     def run(self, dataSlice, slice_point=None):
@@ -327,7 +357,7 @@ class Detect_Metric(Base_Metric):
                 if isinstance(obs_record[k], np.ndarray):
                     obs_record[k] = obs_record[k][keep]
  
-        detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record, slice_point) # doesn't create another Base_Metric #shar sept
     
         detected_mask = snr >= 5
         first_det_mjd = np.nan
@@ -379,7 +409,7 @@ class Detect_Metric(Base_Metric):
 class SCECharacterizeMetric(Base_Metric):
     """
 
-    2 detections in the rise, 2 in fade, 2 in rerise
+    2 detections in the rise, 2 in fade, 1 in rerise
     """
     def __init__(self, **kwargs):
         use_extinction = kwargs.pop('use_extinction', True)
@@ -391,7 +421,7 @@ class SCECharacterizeMetric(Base_Metric):
 
     def run(self, dataSlice, slice_point=None):
         snr, filters, times, obs_record = evaluate(self, dataSlice, slice_point, return_full_obs=True)
-        is_detected = self.parent_instance.detect(filters, snr, times, obs_record)
+        is_detected = self.parent_instance.detect(filters, snr, times, obs_record, slice_point)
         mjd_obs = obs_record.get('mjd_obs', np.array([]))
         # file_indices = np.array(obs_record['file_indx'])
         detected=False
