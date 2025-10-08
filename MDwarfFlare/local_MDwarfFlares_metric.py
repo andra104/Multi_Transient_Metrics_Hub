@@ -22,6 +22,7 @@ from scipy.stats import truncnorm
 import numpy as np
 import glob
 import os
+from scipy.stats import truncnorm
 
 import pickle 
 from pathlib import Path
@@ -295,30 +296,152 @@ FILTER_CENTRAL_FREQS = {
 #         )
 
 #9/3-9/4
-class LC:
+# class LC:
+#     """
+#     M-dwarf flare light curves with shared per-event parameters:
+#       - m_quiescent_ref : quiescent mag in a reference band (default r)
+#       - delta_mag_ref   : peak brightening (mag) in the reference band
+#       - fade_time       : days to return to quiescent
+#       - gamma           : fade curve shape (0.5–0.9 = fast early fade)
+#       - beta_quiescent  : quiescent SED slope (Fν ∝ ν^β) to get per-filter quiescent mags
+#       - amp_index       : amplitude color law exponent; Δmag_f ∝ (ν_f/ν_ref)^{amp_index}
+
+#     Support is post-peak only (t>0). Pre-peak samples return NaN.
+#     """
+
+#     def __init__(self, num_lightcurves=1000, load_from=None, ref_filter="r"):
+#         import numpy as np, pickle, os
+
+#         self.filts = ["u", "g", "r", "i", "z", "y"]
+#         self.data = []
+#         self.ref_filter = ref_filter
+
+#         # Shared bounds used by evaluate() to understand support
+#         # (we model up to 12 hours after peak)
+#         self.t_grid = np.geomspace(1e-5, 0.5, 60)
+
+#         if load_from and os.path.exists(load_from):
+#             with open(load_from, 'rb') as f:
+#                 obj = pickle.load(f)
+#             self.data = obj['lightcurves']
+#             self.t_grid = obj.get('t_grid', self.t_grid)
+#             print(f"Loaded flare templates from {load_from}")
+#             return
+
+#         rng = np.random.default_rng(42)
+
+#         # Parameter priors (tweak as desired)
+#         # Quiescent (anchor in r-band to match your earlier ranges)
+#         MQUI_R_RANGE   = (15.0, 18.0)    # mag in r
+#         DELTA_MAG_REF  = (0.7, 1.0)      # mag brightening at peak in ref band
+#         FADE_TIME_RANGE= (0.02, 0.17)    # days (≈30 min – 4 hr)
+#         GAMMA_RANGE    = (0.5, 0.9)      # shape of fade
+#         BETA_Q_RANGE   = (-1.3, -0.7)    # red SED (M dwarfs): Fν ∝ ν^β, β ~ -1
+#         AMP_INDEX_RANGE= (0.5, 1.0)      # stronger amplitude at higher ν
+
+#         nu_ref = FILTER_CENTRAL_FREQS[self.ref_filter]
+
+#         for _ in range(num_lightcurves):
+#             # Shared per-event parameters
+#             m_quiescent_ref = rng.uniform(*MQUI_R_RANGE)
+#             delta_mag_ref   = rng.uniform(*DELTA_MAG_REF)
+#             fade_time       = rng.uniform(*FADE_TIME_RANGE)
+#             gamma           = rng.uniform(*GAMMA_RANGE)
+#             beta_quiescent  = rng.uniform(*BETA_Q_RANGE)
+#             amp_index       = rng.uniform(*AMP_INDEX_RANGE)
+
+#             # Event-specific time grid (up to ~3×fade_time, capped at 0.5 d)
+#             t_end = min(3.0 * fade_time, 0.5)
+#             t_ev  = np.geomspace(1e-5, t_end, 48)
+
+#             lc = {}
+#             for f in self.filts:
+#                 # Quiescent per filter from a simple power-law SED
+#                 m_quiescent_f = apply_spectral_index(
+#                     m_quiescent_ref, f, ref_filter=self.ref_filter, beta=beta_quiescent
+#                 )
+
+#                 # Amplitude color law: bigger Δ in blue
+#                 nu_f = FILTER_CENTRAL_FREQS[f]
+#                 amp_scale = (nu_f / nu_ref) ** amp_index
+#                 delta_mag_f = delta_mag_ref * amp_scale
+#                 # Optionally clamp to keep things sane
+#                 delta_mag_f = float(np.clip(delta_mag_f, 0.3, 1.8))
+
+#                 m_peak_f = m_quiescent_f - delta_mag_f
+
+#                 # Fade curve (power-law-ish in time fraction)
+#                 #9/5 tail-free (recommended)
+#                 eps  = 1e-6  # days; keep us just shy of fade_time
+#                 mask = t_ev < (fade_time - eps)
+#                 t_use = t_ev[mask]
+                
+#                 # if fade_time is so short that mask is empty, keep a single peak sample
+#                 if t_use.size == 0:
+#                     t_use = np.array([1e-5])
+#                     mag_use = np.array([m_peak_f])
+#                 else:
+#                     frac    = t_use / fade_time            # in (0,1)
+#                     mag_use = m_peak_f + delta_mag_f * (frac ** gamma)
+                
+#                 lc[f] = {
+#                     "ph":  t_use,          # no samples at/after fade_time
+#                     "mag": mag_use,
+#                     "quiescent_mag": m_quiescent_f,
+#                     "delta_mag":     delta_mag_f,
+#                     "fade_time":     fade_time,
+#                     "gamma":         gamma,
+#                     "m_quiescent_ref": m_quiescent_ref,
+#                     "delta_mag_ref":   delta_mag_ref,
+#                     "beta_quiescent":  beta_quiescent,
+#                     "amp_index":       amp_index,
+#                     "ref_filter":      self.ref_filter,
+#                 }
+
+
+#             self.data.append(lc)
+
+
+#shar sept
+
+class LC: #shar sept
     """
-    M-dwarf flare light curves with shared per-event parameters:
-      - m_quiescent_ref : quiescent mag in a reference band (default r)
-      - delta_mag_ref   : peak brightening (mag) in the reference band
-      - fade_time       : days to return to quiescent
-      - gamma           : fade curve shape (0.5–0.9 = fast early fade)
-      - beta_quiescent  : quiescent SED slope (Fν ∝ ν^β) to get per-filter quiescent mags
-      - amp_index       : amplitude color law exponent; Δmag_f ∝ (ν_f/ν_ref)^{amp_index}
-
-    Support is post-peak only (t>0). Pre-peak samples return NaN.
+    Flare-only M Dwarf light curves.
+    Flare peak (delta mags): 0-3 (should have distribution peak around .7, sampled in non-log, rn uniform)
+    Decay time: 60 seconds to 11000 seconds (evenly sampled in log)
+    starts at peak
+    
     """
 
-    def __init__(self, num_lightcurves=1000, load_from=None, ref_filter="r"):
-        import numpy as np, pickle, os
-
-        self.filts = ["u", "g", "r", "i", "z", "y"]
+    def __init__(self, num_lightcurves=1000, load_from=None):
         self.data = []
-        self.ref_filter = ref_filter
+        self.filts = ["u", "g", "r", "i", "z", "y"]
+        self.peak_offset = {'u': 0, #15000 K blackbody
+             'g': -0.69576737,
+             'r': 0.30659326,
+             'i': 1.18408935,
+             'z': 2.01890619,
+             'y': 3.15849403}
 
-        # Shared bounds used by evaluate() to understand support
-        # (we model up to 12 hours after peak)
-        self.t_grid = np.geomspace(1e-5, 0.5, 60)
 
+        rng = np.random.default_rng(42)
+
+
+
+        # For backward compatibility in plotting functions
+        self.t_grid = np.linspace(-0.05, 0.17, 15)  # dummy representative grid #shar sept do we use this? should think about whether it is correct if so 
+
+        # Quiescent magnitude ranges (for amplitude reference)
+        QUIESCENT_MAG_RANGES = { 
+            'u': (17.5, 20.5),
+            'g': (16.5, 19.5),
+            'r': (15.0, 18.0),
+            'i': (13.0, 15.5),
+            'z': (12.0, 13.5),
+            'y': (11.5, 12.7)
+        }
+
+        # Load from file if exists
         if load_from and os.path.exists(load_from):
             with open(load_from, 'rb') as f:
                 obj = pickle.load(f)
@@ -327,76 +450,73 @@ class LC:
             print(f"Loaded flare templates from {load_from}")
             return
 
-        rng = np.random.default_rng(42)
-
-        # Parameter priors (tweak as desired)
-        # Quiescent (anchor in r-band to match your earlier ranges)
-        MQUI_R_RANGE   = (15.0, 18.0)    # mag in r
-        DELTA_MAG_REF  = (0.7, 1.0)      # mag brightening at peak in ref band
-        FADE_TIME_RANGE= (0.02, 0.17)    # days (≈30 min – 4 hr)
-        GAMMA_RANGE    = (0.5, 0.9)      # shape of fade
-        BETA_Q_RANGE   = (-1.3, -0.7)    # red SED (M dwarfs): Fν ∝ ν^β, β ~ -1
-        AMP_INDEX_RANGE= (0.5, 1.0)      # stronger amplitude at higher ν
-
-        nu_ref = FILTER_CENTRAL_FREQS[self.ref_filter]
-
-        for _ in range(num_lightcurves):
-            # Shared per-event parameters
-            m_quiescent_ref = rng.uniform(*MQUI_R_RANGE)
-            delta_mag_ref   = rng.uniform(*DELTA_MAG_REF)
-            fade_time       = rng.uniform(*FADE_TIME_RANGE)
-            gamma           = rng.uniform(*GAMMA_RANGE)
-            beta_quiescent  = rng.uniform(*BETA_Q_RANGE)
-            amp_index       = rng.uniform(*AMP_INDEX_RANGE)
-
-            # Event-specific time grid (up to ~3×fade_time, capped at 0.5 d)
-            t_end = min(3.0 * fade_time, 0.5)
-            t_ev  = np.geomspace(1e-5, t_end, 48)
-
+        # Generate synthetic flare LCs
+        for i, _ in enumerate(range(num_lightcurves)):
             lc = {}
+
+            # Pick flare duration in days (20 minutes to 4 hours) #shar sept
+            total_duration = rng.uniform(np.log(1200), np.log(14400)) #seconds #evenly sampled in log
+            total_duration = np.exp(total_duration) / (60*60*24)  # convert seconds to days
+            #originally had it start at 60 seconds, but
+            #ignoring anything shorter than 20 minutes 
+
+            # Time arrays #shar sept
+
+            t_fade = np.array([0,total_duration]) # fade starting at peak (t=0)
+            t_grid_event = t_fade
+            
+
+
+            #delta mag at peak -these are in U filter, from 
+            #ideally we want the distribution peaked around 2.7 instead of uniform
+            a, b = (0 - 2.7) / 1, (5.5 - 2.7) / 1   #  bounds for trunc norm
+
+            delta_mag = delta_mag = truncnorm.rvs(a, b, loc=2.7, scale=1, random_state=rng)
+
+            qmin_g, qmax_g = QUIESCENT_MAG_RANGES['g']
+            quiescent_g = rng.uniform(qmin_g, qmax_g) 
+        
+            # Peak brightness
+            peak_mag = quiescent_g - delta_mag
+
+            mag_fade = np.array([peak_mag, quiescent_g])
+        
+
+        
+            # lc[f] = {
+            #     'ph': t_grid_event,
+            #     'mag': mag_fade,
+            #     # 'rise_time_days': rise_time_days,
+            #     'fade_time_days': total_duration
+            # }
+            
+            # if i<10:
+            #     print("initial light curve filter (g): ")
+            #     print(lc[f])
+            #     print("flux g  q ", flux_g_quiescent)
+            #     print("flux g peak ", flux_g_peak)
+
+            #okay a way to approximate the quiescent distribution - we'll scale it
+            quiescent_g_scale = (quiescent_g - qmin_g) / (qmax_g - qmin_g)
+            
             for f in self.filts:
-                # Quiescent per filter from a simple power-law SED
-                m_quiescent_f = apply_spectral_index(
-                    m_quiescent_ref, f, ref_filter=self.ref_filter, beta=beta_quiescent
-                )
-
-                # Amplitude color law: bigger Δ in blue
-                nu_f = FILTER_CENTRAL_FREQS[f]
-                amp_scale = (nu_f / nu_ref) ** amp_index
-                delta_mag_f = delta_mag_ref * amp_scale
-                # Optionally clamp to keep things sane
-                delta_mag_f = float(np.clip(delta_mag_f, 0.3, 1.8))
-
-                m_peak_f = m_quiescent_f - delta_mag_f
-
-                # Fade curve (power-law-ish in time fraction)
-                #9/5 tail-free (recommended)
-                eps  = 1e-6  # days; keep us just shy of fade_time
-                mask = t_ev < (fade_time - eps)
-                t_use = t_ev[mask]
+                qmin, qmax = QUIESCENT_MAG_RANGES[f]
+                mag_f_quiescent = (qmax-qmin) * quiescent_g_scale + qmin
                 
-                # if fade_time is so short that mask is empty, keep a single peak sample
-                if t_use.size == 0:
-                    t_use = np.array([1e-5])
-                    mag_use = np.array([m_peak_f])
-                else:
-                    frac    = t_use / fade_time            # in (0,1)
-                    mag_use = m_peak_f + delta_mag_f * (frac ** gamma)
                 
-                lc[f] = {
-                    "ph":  t_use,          # no samples at/after fade_time
-                    "mag": mag_use,
-                    "quiescent_mag": m_quiescent_f,
-                    "delta_mag":     delta_mag_f,
-                    "fade_time":     fade_time,
-                    "gamma":         gamma,
-                    "m_quiescent_ref": m_quiescent_ref,
-                    "delta_mag_ref":   delta_mag_ref,
-                    "beta_quiescent":  beta_quiescent,
-                    "amp_index":       amp_index,
-                    "ref_filter":      self.ref_filter,
-                }
+                mag_f_peak = mag_f_quiescent - delta_mag+ self.peak_offset[f]
+                if mag_f_peak > mag_f_quiescent: #dont want to accidentally make it brighter
+                    mag_f_peak = mag_f_quiescent
+                lc[f] = {'ph': t_grid_event, 'mag': np.array([mag_f_peak,mag_f_quiescent])}
+                
+                #JUST FOR PLOTS - same quiescent mag
+                # mag_f_peak = quiescent_g - delta_mag+ self.peak_offset[f]
+                # if mag_f_peak > quiescent_g: #dont want to accidentally make it brighter
+                    # mag_f_peak = quiescent_g
+                # lc[f] = {'ph': t_grid_event, 'mag': np.array([mag_f_peak,quiescent_g])}
 
+                # if i<10:
+                    # print("lc in ",f,": ",lc[f])
 
             self.data.append(lc)
 
@@ -481,16 +601,11 @@ class Base_Metric(BaseMetric):
 
 
 
-    def detect(self, filters, snr, times, obs_record):
+    def detect(self, filters, snr, times, obs_record, slice_point):
         """
         Detection Criteria:
 
-        Option A:  ≥3 detections ≥3σ  AND  ≥1 detection ≥5σ, All within 0.5 days
-        
-        Option B:  ≥2 detections ≥5σ  AND  separated by ≥15 min (0.0104 days)
-        
-        If either condition is met, detected = True
-        Else, detected = False
+
         """
         detected = False
     
@@ -526,8 +641,22 @@ class Base_Metric(BaseMetric):
         #     detected = True 
 
         #shar sept
-        if np.sum(idx_5sigma)>0:
-            detected=True
+        filters_good = filters[idx_5sigma]
+        mags_good = obs_record['mag_obs'][idx_5sigma]
+
+        for i in range(len(mags_good)):
+            band = filters_good[i]
+            # print("band: ",band)
+            if band=='u' or band=='g' or band=='r':
+                mag_q = self.lc_model.data[slice_point['file_indx']][band]['mag'][-1]
+                # print("mag_q: ",mag_q)
+                # print("mag: ",mags_good[i])
+                if mags_good[i] > mag_q + .1: #needs to be higher than quiescent
+                    # print("detected")
+                    detected = True
+        
+
+        #todo: change to observable brightness change? not sure how to do that without a quiescent magnitude though
     
         return detected
 
@@ -566,7 +695,7 @@ class Detect_Metric(Base_Metric):
                     obs_record[k] = obs_record[k][keep]
  
         #detected = self.parent_instance.detect(filters, snr, times, obs_record) #initiates again
-        detected = Base_Metric.detect(self, filters, snr, times, obs_record) # doesn't create another Base_Metric
+        detected = Base_Metric.detect(self, filters, snr, times, obs_record, slice_point) # doesn't create another Base_Metric
 
     
         detected_mask = snr >= 5
@@ -691,7 +820,7 @@ class MDwarfFlareSilverMetric(Base_Metric):
         if np.sum(detected)<2: #shar sept
             return 0.0
 
-        #todo: implement 1/e timescale criterion
+        #1/e timescale criterion
         # #this is in survey time not mjd
         t_start   = self.lc_model.data[slice_point['file_indx']][f]['ph'][0] + slice_point['peak_time'] 
         t_end   = self.lc_model.data[slice_point['file_indx']][f]['ph'][:-1] + slice_point['peak_time']

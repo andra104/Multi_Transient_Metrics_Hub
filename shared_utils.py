@@ -93,7 +93,7 @@ def inject_uniform_healpix(nside, n_events, seed=42):
 # Plotting light curves from pkl file
 # --------------------------------------------
 
-def plot_template_lcs(templates_file, num=3, use_log_time=True, plot_overlap=False, ylim=None):
+def plot_template_lcs(templates_file, num=3, use_log_time=True, plot_overlap=False, ylim=None, plot_hours=False):
     '''
     Plot LC templates from a pickle. If plot_overlap=True, all requested templates
     are drawn on a single figure and the title lists every included template ID.
@@ -128,8 +128,12 @@ def plot_template_lcs(templates_file, num=3, use_log_time=True, plot_overlap=Fal
 
         for f in filters:
             time_vals = lcdict["lightcurves"][i][f]['ph']
+            if use_log_time and plot_hours:
+                print("ERROR: can only use log time OR plot hours. using log time")
             if use_log_time:
                 time_vals = np.log10(time_vals + 1e-5)
+            if plot_hours:
+                time_vals = time_vals*24
 
             plt.plot(
                 time_vals,
@@ -143,6 +147,8 @@ def plot_template_lcs(templates_file, num=3, use_log_time=True, plot_overlap=Fal
         if not plot_overlap:
             plt.title(f"Light Curve Template #{i}", size=20)
             plt.xlabel("Log Time (days)" if use_log_time else "Time (days)", size=15)
+            if plot_hours:
+                plt.xlabel("Time (hours)", size=15)
             plt.ylabel("Absolute Mag", size=15)
             plt.gca().invert_yaxis()
             if ylim is not None:
@@ -155,6 +161,8 @@ def plot_template_lcs(templates_file, num=3, use_log_time=True, plot_overlap=Fal
         included_ids = ", ".join(f"#{k}" for k in range(n_plot))
         plt.title(f"Light Curve Templates {included_ids}", size=20)
         plt.xlabel("Log Time (days)" if use_log_time else "Time (days)", size=15)
+        if plot_hours:
+                plt.xlabel("Time (hours)", size=15)
         plt.ylabel("Absolute Mag", size=15)
         plt.gca().invert_yaxis()
         if ylim is not None:
