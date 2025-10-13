@@ -417,11 +417,11 @@ class LC: #shar sept
         self.data = []
         self.filts = ["u", "g", "r", "i", "z", "y"]
         self.peak_offset = {'u': 0, #15000 K blackbody
-             'g': -0.69576737,
-             'r': 0.30659326,
-             'i': 1.18408935,
-             'z': 2.01890619,
-             'y': 3.15849403}
+             'g': 0.6839,
+             'r': 1.5090,
+             'i': 2.1686,
+             'z': 2.6835,
+             'y': 3.1013}
 
 
         rng = np.random.default_rng(42)
@@ -656,7 +656,6 @@ class Base_Metric(BaseMetric):
                     detected = True
         
 
-        #todo: change to observable brightness change? not sure how to do that without a quiescent magnitude though
     
         return detected
 
