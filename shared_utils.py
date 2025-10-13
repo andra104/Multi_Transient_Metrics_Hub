@@ -1558,7 +1558,8 @@ def plot_population_lcs(pop_file,
     - y-axis inverted (mags: brighter up).
     - Safe for quick diagnostics; science calculations still come from metrics/evaluate().
     """
-    
+    print("FYI this has not been double-checked and does not appear to be working correctly for m dwarf flares.")
+    print("use with caution")
     import numpy as _np  # local, shadow-proof
 
     # coerce pop_file to a plain string if it came in as a 0-d array / scalar box
@@ -2018,3 +2019,4 @@ class PickledLC:
         # NaN outside support
         out[(t < ph.min()) | (t > ph.max())] = np.nan
         return out
+
